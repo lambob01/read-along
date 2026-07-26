@@ -76,18 +76,31 @@
 
 	$effect(() => {
 		const id = $reader.activeSentenceId;
-		if (id === null) return;
 		if (!highlighter) return;
+
+		if (id === null) {
+			// No timed sentence covers the current playback position (a gap
+			// between cues, non-speech audio, or past the last timed sentence).
+			// Without this, whatever was highlighted before stays lit forever.
+			highlighter.reset();
+			return;
+		}
 
 		if (epubRender) {
 			// Mount the chapter first, or the sentence's spans will not exist.
 			epubRender.ensureVisible(id);
 			const spans = epubRender.spansFor(id);
-			if (spans.length === 0) return;
+			if (spans.length === 0) {
+				highlighter.reset();
+				return;
+			}
 			highlighter.activateMany(spans);
 		} else {
 			const el = $reader.sentenceMap?.get(id);
-			if (!el) return;
+			if (!el) {
+				highlighter.reset();
+				return;
+			}
 			highlighter.activate(el);
 		}
 
