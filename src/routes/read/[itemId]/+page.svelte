@@ -5,6 +5,7 @@
 	import { connection } from '$lib/stores/connection';
 	import { player } from '$lib/stores/player';
 	import { reader } from '$lib/stores/reader';
+	import { recent } from '$lib/stores/recent';
 	import { settings, defaultSettings } from '$lib/stores/settings';
 	import { ABSClient } from '$lib/abs/client';
 	import { getItem, getStreamSession } from '$lib/abs/api';
@@ -49,6 +50,7 @@
 	let autoScroller: AutoScroller | null = null;
 	let highlighter: HighlightHandle | null = null;
 	let epubRender: EpubRenderHandle | null = null;
+	let saveBookmarkInterval: ReturnType<typeof setInterval> | null = null;
 
 	/** Which text source is driving the view. */
 	let textMode = $state<TextSourceMode>('none');
@@ -121,9 +123,16 @@
 				}
 			}
 
-			const saveBookmarkId = setInterval(() => {
+			saveBookmarkInterval = setInterval(() => {
 				if ($player.currentTime > 0) {
 					player.saveBookmark(itemId, $player.currentTime);
+					recent.record({
+						itemId,
+						title: item.media?.metadata?.title || 'Untitled',
+						authorName: item.media?.metadata?.authorName || '',
+						duration: $player.duration || 0,
+						position: $player.currentTime
+					});
 				}
 			}, 5000);
 
@@ -225,6 +234,17 @@
 	});
 
 	onDestroy(() => {
+		if ($player.currentTime > 0) {
+			player.saveBookmark(itemId, $player.currentTime);
+			recent.record({
+				itemId,
+				title: $reader.item?.media?.metadata?.title || 'Untitled',
+				authorName: $reader.item?.media?.metadata?.authorName || '',
+				duration: $player.duration || 0,
+				position: $player.currentTime
+			});
+		}
+		if (saveBookmarkInterval) clearInterval(saveBookmarkInterval);
 		syncController?.stop();
 		autoScroller?.destroy();
 		highlighter?.reset();
@@ -387,7 +407,7 @@
 		<p class="text-red-500">{errorState}</p>
 		<button
 			onclick={() => goto('/library')}
-			class="rounded bg-blue-600 px-4 py-2 text-white"
+			class="rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-fg)] transition-colors hover:bg-[var(--accent-hover)]"
 		>
 			Back to Library
 		</button>
@@ -495,8 +515,8 @@
 						max={$player.duration || 0}
 						value={$player.currentTime}
 						oninput={handleSeek}
-						style="background: linear-gradient(to right, #3b82f6 0%, #3b82f6 {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
-						class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer"
+						style="background: linear-gradient(to right, var(--accent) 0%, var(--accent) {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
+						class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer"
 					/>
 					<span class="text-xs tabular-nums text-[var(--muted)] min-w-[48px] sm:min-w-[52px]">
 						{formatTime($player.duration)}
@@ -593,7 +613,7 @@
 										step="0.05"
 										value={$player.volume}
 										oninput={handleVolumeChange}
-										class="h-16 w-6 appearance-none rounded-full [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:cursor-pointer"
+										class="h-16 w-6 appearance-none rounded-full [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:cursor-pointer"
 										aria-label="Volume slider"
 									/>
 								</div>
@@ -618,7 +638,7 @@
 								{/each}
 							</select>
 							{#if sleepRemaining}
-								<span class="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-blue-600">{sleepRemaining}</span>
+								<span class="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-[var(--accent)]">{sleepRemaining}</span>
 							{/if}
 						</div>
 
@@ -644,7 +664,7 @@
 													jumpToChapter(i);
 													showChapterDropdown = false;
 												}}
-												class="block w-full px-3 py-2.5 sm:py-2 text-left text-sm text-[var(--fg)] hover:bg-[var(--border)] {i === currentChapterIdx ? 'bg-blue-600/10 text-blue-600 font-medium' : ''}"
+												class="block w-full px-3 py-2.5 sm:py-2 text-left text-sm text-[var(--fg)] hover:bg-[var(--border)] {i === currentChapterIdx ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : ''}"
 											>
 												{formatTime(ch.start)} — {ch.title}
 											</button>
@@ -669,10 +689,10 @@
 							onclick={toggleAutoScroll}
 							class="rounded border px-2 sm:px-3 py-1.5 text-xs sm:text-sm min-h-[40px] sm:min-h-[44px] flex items-center gap-1 sm:gap-1.5 {autoScrollLocked
 								? 'border-[var(--border)] text-[var(--muted)]'
-								: 'border-blue-600 bg-blue-600/10 text-blue-600'}"
+								: 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'}"
 							aria-label={autoScrollLocked ? 'Enable auto-scroll' : 'Disable auto-scroll'}
 						>
-							<span class="inline-block h-2 w-2 rounded-full {autoScrollLocked ? 'bg-[var(--muted)]' : 'bg-blue-600'}"></span>
+							<span class="inline-block h-2 w-2 rounded-full {autoScrollLocked ? 'bg-[var(--muted)]' : 'bg-[var(--accent)]'}"></span>
 							<span class="hidden sm:inline">Autoscroll</span>
 						</button>
 					</div>
@@ -715,7 +735,7 @@
 								<button
 									onclick={() => settings.update((s) => ({ ...s, theme: t.value as typeof s.theme }))}
 									class="flex-1 rounded border px-2 py-1.5 text-sm {t.value === $settings.theme
-										? 'border-blue-600 bg-blue-600/10 text-blue-600'
+										? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
 										: 'border-[var(--border)] text-[var(--fg)]'}"
 								>
 									{t.label}
