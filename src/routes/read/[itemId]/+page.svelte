@@ -23,6 +23,21 @@
 	let playerEl = $state<HTMLAudioElement>();
 	let showSettings = $state(false);
 	let showChapterDropdown = $state(false);
+	let showVolumeSlider = $state(false);
+
+	type SleepOption = number | 'chapter';
+	const sleepPresets: { label: string; value: SleepOption | null }[] = [
+		{ label: 'Off', value: null },
+		{ label: '15 min', value: 15 },
+		{ label: '30 min', value: 30 },
+		{ label: '45 min', value: 45 },
+		{ label: '60 min', value: 60 },
+		{ label: 'End of chapter', value: 'chapter' }
+	];
+	let sleepTimer: SleepOption | null = $state(null);
+	let sleepEndTime: number | null = $state(null);
+	let sleepRemaining: string = $state('');
+	let sleepInterval: ReturnType<typeof setInterval> | null = null;
 	let autoScrollLocked = $state(false);
 	let loading = $state(true);
 	let errorState = $state('');
@@ -80,7 +95,17 @@
 			if (audioSrc) {
 				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
 				player.setSrc(src);
+				const bookmark = player.getBookmark(itemId);
+				if (bookmark && bookmark > 0) {
+					setTimeout(() => player.seek(bookmark), 500);
+				}
 			}
+
+			const saveBookmarkId = setInterval(() => {
+				if ($player.currentTime > 0) {
+					player.saveBookmark(itemId, $player.currentTime);
+				}
+			}, 5000);
 
 			let cues;
 			let transcriptError = '';
@@ -144,7 +169,9 @@
 		highlighter?.reset();
 		reader.reset();
 		player.pause();
+		clearInterval(sleepInterval!);
 	});
+	
 
 	function handlePlayPause() {
 		if ($player.playing) {
@@ -174,6 +201,54 @@
 		if (!autoScrollLocked && $reader.activeSentenceId !== null) {
 			autoScroller?.scrollTo($reader.activeSentenceId);
 		}
+	}
+
+	function setSleepTimer(opt: SleepOption | null) {
+		clearInterval(sleepInterval!);
+		sleepTimer = opt;
+		if (opt === null) {
+			sleepEndTime = null;
+			sleepRemaining = '';
+			return;
+		}
+		if (opt === 'chapter') {
+			sleepEndTime = null;
+			sleepRemaining = 'End of chapter';
+			sleepInterval = setInterval(() => {
+				const idx = chapters.findLastIndex((c) => $player.currentTime >= c.start);
+				const next = chapters[idx + 1];
+				if (next && $player.currentTime >= next.start) {
+					player.pause();
+					clearInterval(sleepInterval!);
+					sleepTimer = null;
+					sleepEndTime = null;
+					sleepRemaining = '';
+				}
+			}, 1000);
+		} else {
+			const end = Date.now() + opt * 60 * 1000;
+			sleepEndTime = end;
+			function updateRemaining() {
+				const left = Math.max(0, Math.ceil((sleepEndTime! - Date.now()) / 1000));
+				const m = Math.floor(left / 60);
+				const s = left % 60;
+				sleepRemaining = `${m}:${s.toString().padStart(2, '0')}`;
+				if (left <= 0) {
+					player.pause();
+					clearInterval(sleepInterval!);
+					sleepTimer = null;
+					sleepEndTime = null;
+					sleepRemaining = '';
+				}
+			}
+			updateRemaining();
+			sleepInterval = setInterval(updateRemaining, 1000);
+		}
+	}
+
+	function handleVolumeChange(e: Event) {
+		const input = e.target as HTMLInputElement;
+		player.setVolume(parseFloat(input.value));
 	}
 
 	function formatTime(s: number): string {
@@ -409,6 +484,60 @@
 
 					<!-- Utility controls -->
 					<div class="flex items-center justify-center gap-1.5 sm:gap-2">
+						<!-- Volume -->
+						<div class="relative">
+							<button
+								onclick={() => (showVolumeSlider = !showVolumeSlider)}
+								class="rounded p-1.5 text-[var(--fg)] hover:bg-[var(--border)] min-w-[40px] min-h-[40px] sm:min-h-[44px] flex items-center justify-center"
+								aria-label="Volume"
+							>
+								<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+									<path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.5H4a1 1 0 00-1 1v5a1 1 0 001 1h2.5l4 4V4.5l-4 4z"/>
+								</svg>
+							</button>
+							{#if showVolumeSlider}
+								<button
+									class="fixed inset-0 z-40 cursor-default"
+									onclick={() => (showVolumeSlider = false)}
+									aria-label="Close volume"
+								></button>
+								<div class="absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 rounded border border-[var(--border)] bg-[var(--surface)] p-2 shadow-lg">
+									<input
+										type="range"
+										min="0"
+										max="1"
+										step="0.05"
+										value={$player.volume}
+										oninput={handleVolumeChange}
+										class="h-16 w-6 appearance-none rounded-full [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:cursor-pointer"
+										aria-label="Volume slider"
+									/>
+								</div>
+							{/if}
+						</div>
+
+						<!-- Sleep timer -->
+						<div class="relative">
+							<select
+								value={sleepTimer ?? 'off'}
+								onchange={(e) => {
+									const v = e.currentTarget.value;
+									if (v === 'off') setSleepTimer(null);
+									else if (v === 'chapter') setSleepTimer('chapter');
+									else setSleepTimer(parseInt(v));
+								}}
+								class="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 sm:px-2 py-1.5 text-xs sm:text-sm text-[var(--fg)] min-h-[40px] sm:min-h-[44px] cursor-pointer appearance-none"
+								aria-label="Sleep timer"
+							>
+								{#each sleepPresets as p}
+									<option value={p.value ?? 'off'}>{p.label}</option>
+								{/each}
+							</select>
+							{#if sleepRemaining}
+								<span class="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-blue-600">{sleepRemaining}</span>
+							{/if}
+						</div>
+
 						{#if chapters.length > 0}
 							<div class="relative">
 								<button

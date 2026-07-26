@@ -5,6 +5,7 @@ export interface PlayerState {
 	duration: number;
 	playing: boolean;
 	rate: number;
+	volume: number;
 	chapter: number;
 }
 
@@ -25,6 +26,7 @@ function createPlayerStore() {
 		duration: 0,
 		playing: false,
 		rate: 1,
+		volume: 1,
 		chapter: 0
 	});
 
@@ -35,6 +37,17 @@ function createPlayerStore() {
 	}
 
 	function noop() {}
+
+	const BOOKMARKS_KEY = 'reader-bookmarks';
+
+	function loadBookmarks(): Record<string, number> {
+		if (typeof localStorage === 'undefined') return {};
+		try {
+			return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+		} catch {
+			return {};
+		}
+	}
 
 	const player = {
 		subscribe,
@@ -52,6 +65,11 @@ function createPlayerStore() {
 		setRate(rate: number) {
 			const clamped = Math.max(0.5, Math.min(3, rate));
 			withAudio((a) => { a.playbackRate = clamped; }, undefined);
+		},
+		setVolume(vol: number) {
+			const clamped = Math.max(0, Math.min(1, vol));
+			withAudio((a) => { a.volume = clamped; }, undefined);
+			update((s) => ({ ...s, volume: clamped }));
 		},
 		skipBack(seconds: number = 10) {
 			withAudio((a) => {
@@ -75,6 +93,16 @@ function createPlayerStore() {
 		},
 		getAudioElement(): HTMLAudioElement | null {
 			return getAudio();
+		},
+		saveBookmark(itemId: string, time: number) {
+			if (typeof localStorage === 'undefined') return;
+			const bookmarks = loadBookmarks();
+			bookmarks[itemId] = time;
+			localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+		},
+		getBookmark(itemId: string): number | null {
+			const bookmarks = loadBookmarks();
+			return bookmarks[itemId] ?? null;
 		}
 	};
 
@@ -82,7 +110,6 @@ function createPlayerStore() {
 		const a = getAudio();
 		if (!a) return;
 
-		let initialized = false;
 		if (a.dataset.eventsSetup === '1') return;
 		a.dataset.eventsSetup = '1';
 
