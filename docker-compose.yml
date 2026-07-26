@@ -1,6 +1,6 @@
 services:
   reader:
-    image: ghcr.io/lambob01/read-along:latest
+    build: .
     ports:
       - "80:80"
       - "443:443"
@@ -10,13 +10,6 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
-    restart: unless-stopped
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 300 --cleanup reader
     restart: unless-stopped
 
 volumes:
