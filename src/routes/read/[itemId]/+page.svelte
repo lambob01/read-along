@@ -7,16 +7,19 @@
 	import { reader } from '$lib/stores/reader';
 	import { settings, defaultSettings } from '$lib/stores/settings';
 	import { ABSClient } from '$lib/abs/client';
-	import { getItem, getStreamSession, getTranscript } from '$lib/abs/api';
-	import { parseCues } from '$lib/sync/parse';
+	import { getItem, getStreamSession } from '$lib/abs/api';
 	import { mergeCues } from '$lib/sync/merge';
 	import { buildIndex } from '$lib/sync/index';
 	import { createSyncController, type SyncController } from '$lib/sync/ticker';
 	import { createAutoScroller, type AutoScroller } from '$lib/sync/autoscroll';
 	import { renderParagraphs } from '$lib/reader/renderer';
+	import { renderEpub, type EpubRenderHandle } from '$lib/reader/epubRenderer';
+	import { loadTextSource, type TextSourceMode } from '$lib/epub/source';
 	import { createHighlighter, type HighlightHandle } from '$lib/reader/highlight';
 
-	const itemId = $derived($page.params.itemId);
+	// Route params are typed as possibly-undefined; this page cannot render
+	// without an id, so narrow once here rather than at every call site.
+	const itemId = $derived($page.params.itemId ?? '');
 
 	let scrollerEl = $state<HTMLDivElement>();
 	let contentEl = $state<HTMLDivElement>();
@@ -45,6 +48,14 @@
 	let syncController: SyncController | null = null;
 	let autoScroller: AutoScroller | null = null;
 	let highlighter: HighlightHandle | null = null;
+	let epubRender: EpubRenderHandle | null = null;
+
+	/** Which text source is driving the view. */
+	let textMode = $state<TextSourceMode>('none');
+	/** Fraction of the book that received timing, when in EPUB mode. */
+	let coverage = $state<number | null>(null);
+	/** Non-fatal explanation when EPUB mode was attempted but not used. */
+	let sourceNotice = $state<string | null>(null);
 
 	let connectionToken = '';
 	let connectionUrl = '';
@@ -64,11 +75,20 @@
 	$effect(() => {
 		const id = $reader.activeSentenceId;
 		if (id === null) return;
+		if (!highlighter) return;
 
-		const el = $reader.sentenceMap?.get(id);
-		if (!el || !highlighter) return;
+		if (epubRender) {
+			// Mount the chapter first, or the sentence's spans will not exist.
+			epubRender.ensureVisible(id);
+			const spans = epubRender.spansFor(id);
+			if (spans.length === 0) return;
+			highlighter.activateMany(spans);
+		} else {
+			const el = $reader.sentenceMap?.get(id);
+			if (!el) return;
+			highlighter.activate(el);
+		}
 
-		highlighter.activate(el);
 		if (!autoScrollLocked) {
 			autoScroller?.scrollTo(id);
 		}
@@ -107,17 +127,58 @@
 				}
 			}, 5000);
 
-			let cues;
-			let transcriptError = '';
+			let source;
 			try {
-				const raw = await getTranscript(client, itemId);
-				cues = parseCues(raw);
+				source = await loadTextSource(client, itemId);
 			} catch (err) {
-				cues = null;
-				transcriptError = err instanceof Error ? err.message : 'No transcript';
+				source = null;
+				sourceNotice = err instanceof Error ? err.message : 'No transcript';
 			}
 
-			if (cues && cues.length > 0) {
+			textMode = source?.mode ?? 'none';
+			if (source?.notice) sourceNotice = source.notice;
+
+			if (source && source.mode === 'epub' && source.index && source.doc) {
+				const index = source.index;
+				const doc = source.doc;
+				coverage = index.stats.coverage;
+
+				// The ticker only reads starts/ends and sentence ids, so the
+				// aligned index substitutes for a cue index without changes.
+				const timingIndex = {
+					paragraphs: [],
+					sentences: index.timed,
+					starts: index.starts,
+					ends: index.ends
+				};
+				reader.setCueIndex(timingIndex);
+
+				requestAnimationFrame(() => {
+					if (!contentEl) return;
+					epubRender = renderEpub(index, doc.chapters, contentEl);
+					// Mount the opening chapters so there is text before playback.
+					epubRender.ensureVisible(index.sentences[0]?.id ?? 0);
+
+					const audioEl = player.getAudioElement();
+					if (audioEl) {
+						syncController = createSyncController(
+							audioEl,
+							timingIndex,
+							(id) => {
+								reader.setActiveSentence(id);
+							}
+						);
+						syncController.start();
+					}
+
+					if (scrollerEl) {
+						autoScroller = createAutoScroller(scrollerEl, (id) =>
+							epubRender?.elementFor(id)
+						);
+					}
+				});
+			} else if (source && source.cues && source.cues.length > 0) {
+				const cues = source.cues;
 				const paragraphs = mergeCues(cues, {
 					gapThreshold,
 					showNonSpeech
@@ -167,6 +228,8 @@
 		syncController?.stop();
 		autoScroller?.destroy();
 		highlighter?.reset();
+		epubRender?.destroy();
+		epubRender = null;
 		reader.reset();
 		player.pause();
 		clearInterval(sleepInterval!);
@@ -372,6 +435,27 @@
 			bind:this={scrollerEl}
 			class="flex-1 overflow-y-auto px-[var(--theme-side-margins)] py-6"
 		>
+			{#if sourceNotice && $reader.cueIndex}
+				<!--
+					Surfaced rather than logged: silent partial alignment is the
+					main failure mode of the EPUB path.
+				-->
+				<div
+					class="mx-auto mb-4 rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
+					style="max-width: var(--theme-max-width);"
+				>
+					{sourceNotice}
+				</div>
+			{:else if textMode === 'epub' && coverage !== null && coverage < 0.95}
+				<div
+					class="mx-auto mb-4 rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
+					style="max-width: var(--theme-max-width);"
+				>
+					{Math.round(coverage * 100)}% of the book is synced to the audio.
+					Unsynced passages are shown but will not highlight.
+				</div>
+			{/if}
+
 			{#if !$reader.cueIndex}
 				<div
 					class="mx-auto flex items-center justify-center py-12"
@@ -753,44 +837,56 @@
 						</div>
 					</div>
 
-					<!-- Gap threshold -->
-					<div>
-						<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="gap-threshold-slider">
-							Gap Threshold ({$settings.gapThreshold}s)
-						</label>
-						<input
-							id="gap-threshold-slider"
-							type="range"
-							min="0.5"
-							max="3"
-							step="0.1"
-							value={$settings.gapThreshold}
-							oninput={(e) =>
-								settings.update((s) => ({
-									...s,
-									gapThreshold: parseFloat(e.currentTarget.value)
-								}))}
-							class="w-full"
-						/>
-					</div>
+					<!--
+						Gap threshold and non-speech filtering only affect the
+						subtitle pipeline, which infers structure from audio gaps.
+						In EPUB mode the structure is real, so these do nothing.
+					-->
+					{#if textMode !== 'epub'}
+						<!-- Gap threshold -->
+						<div>
+							<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="gap-threshold-slider">
+								Gap Threshold ({$settings.gapThreshold}s)
+							</label>
+							<input
+								id="gap-threshold-slider"
+								type="range"
+								min="0.5"
+								max="3"
+								step="0.1"
+								value={$settings.gapThreshold}
+								oninput={(e) =>
+									settings.update((s) => ({
+										...s,
+										gapThreshold: parseFloat(e.currentTarget.value)
+									}))}
+								class="w-full"
+							/>
+						</div>
 
-					<!-- Show non-speech -->
-					<div class="flex items-center justify-between">
-						<label class="text-sm font-medium text-[var(--fg)]" for="show-non-speech">
-							Show non-speech cues
-						</label>
-						<input
-							id="show-non-speech"
-							type="checkbox"
-							checked={$settings.showNonSpeech}
-							onchange={(e) =>
-								settings.update((s) => ({
-									...s,
-									showNonSpeech: e.currentTarget.checked
-								}))}
-							class="h-5 w-5"
-						/>
-					</div>
+						<!-- Show non-speech -->
+						<div class="flex items-center justify-between">
+							<label class="text-sm font-medium text-[var(--fg)]" for="show-non-speech">
+								Show non-speech cues
+							</label>
+							<input
+								id="show-non-speech"
+								type="checkbox"
+								checked={$settings.showNonSpeech}
+								onchange={(e) =>
+									settings.update((s) => ({
+										...s,
+										showNonSpeech: e.currentTarget.checked
+									}))}
+								class="h-5 w-5"
+							/>
+						</div>
+					{:else}
+						<div class="text-sm text-[var(--muted)]">
+							Text is from the EPUB, so paragraph and sentence breaks come
+							from the book itself. Gap and non-speech options do not apply.
+						</div>
+					{/if}
 
 					<!-- Reset -->
 					<button

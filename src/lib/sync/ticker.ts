@@ -1,4 +1,4 @@
-import type { CueIndex } from '$lib/types';
+import type { TimingIndex } from '$lib/types';
 
 export interface SyncController {
 	start(): void;
@@ -8,7 +8,7 @@ export interface SyncController {
 
 export function createSyncController(
 	audio: HTMLAudioElement,
-	index: CueIndex,
+	index: TimingIndex,
 	onActivate: (sentenceId: number | null) => void
 ): SyncController {
 	let cursor = 0;

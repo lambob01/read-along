@@ -73,6 +73,35 @@ export class ABSClient {
 		return this.request<T>('GET', path);
 	}
 
+	/**
+	 * Fetches a path as raw bytes. Required for binary payloads such as EPUB
+	 * (a zip archive) — `request()` funnels non-JSON responses through
+	 * `response.text()`, which would corrupt them via UTF-8 decoding.
+	 */
+	async getBinary(path: string): Promise<ArrayBuffer> {
+		const url = `${this.baseUrl}${path}`;
+
+		let response: Response;
+		try {
+			response = await fetch(url, {
+				method: 'GET',
+				headers: { Authorization: `Bearer ${this.token}` }
+			});
+		} catch (err) {
+			throw new ABSError('Network error', 0, err);
+		}
+
+		if (response.status === 401) {
+			throw new ABSError('Unauthorized — check your API token', 401, null);
+		}
+
+		if (!response.ok) {
+			throw new ABSError(`Request failed: ${response.status}`, response.status, null);
+		}
+
+		return response.arrayBuffer();
+	}
+
 	post<T>(path: string, body: unknown): Promise<T> {
 		return this.request<T>('POST', path, body);
 	}

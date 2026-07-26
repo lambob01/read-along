@@ -68,3 +68,51 @@ body {
 	cursor: default;
 	transition: none;
 }
+
+/* --- EPUB text source ------------------------------------------------- */
+
+.reader-chapter {
+	display: block;
+}
+
+/* Blocks come from the book, so spacing follows the book's own structure
+   rather than the uniform paragraph spacing the subtitle path produced. */
+.reader-block {
+	margin: 0 0 0.9em 0;
+}
+
+.reader-block h1,
+.reader-block h2,
+.reader-block h3 {
+	margin: 1.6em 0 0.8em;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+h1.reader-block,
+h2.reader-block,
+h3.reader-block,
+h4.reader-block {
+	margin: 1.6em 0 0.8em;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+blockquote.reader-block {
+	margin-inline: 1.5em;
+	font-style: italic;
+}
+
+/* Furigana is kept from the EPUB but sized down so it does not disturb the
+   line rhythm. */
+.reader-block ruby rt {
+	font-size: 0.5em;
+	opacity: 0.75;
+	user-select: none;
+}
+
+/* Passages with no matching audio remain readable but are visibly inert, so a
+   missing highlight reads as expected rather than as a bug. */
+.reader-sentence[data-untimed='true'] {
+	opacity: 0.65;
+}

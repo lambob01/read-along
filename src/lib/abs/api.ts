@@ -50,28 +50,84 @@ export async function getStreamSession(
 	);
 }
 
-export async function getTranscript(
-	client: ABSClient,
-	itemId: string
-): Promise<string> {
-	const item = await getItem(client, itemId);
-
-	const allFiles = [
+function collectFiles(item: any): any[] {
+	return [
 		...(item.media?.audioFiles || []),
 		...(item.media?.libraryFiles || []),
 		...(item.media?.tracks || []),
 		...(item.libraryFiles || [])
 	];
+}
+
+export interface ItemSources {
+	/** ino of the subtitle file (.srt/.vtt) — the timing source. */
+	subIno: string | null;
+	subFilename: string | null;
+	/** ino of the EPUB — the text/structure source. */
+	epubIno: string | null;
+	epubFilename: string | null;
+	epubSize: number | null;
+	subSize: number | null;
+}
+
+/**
+ * Locates the timing source (subtitle) and the text source (EPUB) for an item.
+ *
+ * The reader needs both for aligned mode: EPUB supplies text and structure,
+ * the subtitle supplies timestamps. Either may be absent; callers decide the
+ * fallback. Sizes are returned so the alignment cache can be invalidated when
+ * a file is replaced.
+ */
+export async function getItemSources(
+	client: ABSClient,
+	itemId: string
+): Promise<ItemSources> {
+	const item = await getItem(client, itemId);
+	const allFiles = collectFiles(item);
+
+	const nameOf = (f: any) => (f.metadata?.filename || '').toLowerCase();
 
 	const subFile = allFiles.find((f: any) => {
-		const name = (f.metadata?.filename || '').toLowerCase();
+		const name = nameOf(f);
 		return name.endsWith('.srt') || name.endsWith('.vtt');
 	});
 
-	if (subFile) {
-		return client.get<string>(
-			`/api/items/${itemId}/file/${subFile.ino}`
-		);
+	const epubFile = allFiles.find((f: any) => nameOf(f).endsWith('.epub'));
+
+	return {
+		subIno: subFile?.ino ?? null,
+		subFilename: subFile?.metadata?.filename ?? null,
+		subSize: subFile?.metadata?.size ?? null,
+		epubIno: epubFile?.ino ?? null,
+		epubFilename: epubFile?.metadata?.filename ?? null,
+		epubSize: epubFile?.metadata?.size ?? null
+	};
+}
+
+export async function getFileText(
+	client: ABSClient,
+	itemId: string,
+	ino: string
+): Promise<string> {
+	return client.get<string>(`/api/items/${itemId}/file/${ino}`);
+}
+
+export async function getFileBinary(
+	client: ABSClient,
+	itemId: string,
+	ino: string
+): Promise<ArrayBuffer> {
+	return client.getBinary(`/api/items/${itemId}/file/${ino}`);
+}
+
+export async function getTranscript(
+	client: ABSClient,
+	itemId: string
+): Promise<string> {
+	const { subIno } = await getItemSources(client, itemId);
+
+	if (subIno) {
+		return getFileText(client, itemId, subIno);
 	}
 
 	throw new TranscriptNotFoundError(itemId);

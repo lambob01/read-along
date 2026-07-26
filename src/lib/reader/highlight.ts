@@ -1,6 +1,12 @@
 export interface HighlightHandle {
 	activate(el: HTMLElement): void;
 	deactivate(el: HTMLElement): void;
+	/**
+	 * Highlights a sentence rendered as several elements. EPUB sentences can
+	 * straddle inline markup (<em>, <ruby>), so one sentence may occupy more
+	 * than one span.
+	 */
+	activateMany(els: HTMLElement[]): void;
 	reset(): void;
 }
 
@@ -9,12 +15,19 @@ function createCSSHighlight(): HighlightHandle {
 
 	return {
 		activate(el: HTMLElement) {
+			this.activateMany([el]);
+		},
+		activateMany(els: HTMLElement[]) {
 			this.reset();
-			const range = new Range();
-			range.selectNodeContents(el);
-			const highlight = new Highlight(range);
-			CSS.highlights.set('active-sentence', highlight);
-			currentRange = range;
+			if (els.length === 0) return;
+			const ranges = els.map((el) => {
+				const range = new Range();
+				range.selectNodeContents(el);
+				return range;
+			});
+			// The Custom Highlight API accepts multiple ranges per highlight.
+			CSS.highlights.set('active-sentence', new Highlight(...ranges));
+			currentRange = ranges[0];
 		},
 		deactivate(el: HTMLElement) {
 			this.reset();
@@ -27,23 +40,24 @@ function createCSSHighlight(): HighlightHandle {
 }
 
 function createClassFallback(): HighlightHandle {
-	let currentEl: HTMLElement | null = null;
+	let currentEls: HTMLElement[] = [];
 
 	return {
 		activate(el: HTMLElement) {
+			this.activateMany([el]);
+		},
+		activateMany(els: HTMLElement[]) {
 			this.reset();
-			el.classList.add('hl-active');
-			currentEl = el;
+			for (const el of els) el.classList.add('hl-active');
+			currentEls = [...els];
 		},
 		deactivate(el: HTMLElement) {
 			el.classList.remove('hl-active');
-			if (currentEl === el) currentEl = null;
+			currentEls = currentEls.filter((e) => e !== el);
 		},
 		reset() {
-			if (currentEl) {
-				currentEl.classList.remove('hl-active');
-				currentEl = null;
-			}
+			for (const el of currentEls) el.classList.remove('hl-active');
+			currentEls = [];
 		}
 	};
 }

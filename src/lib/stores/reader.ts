@@ -1,11 +1,12 @@
 import { writable } from 'svelte/store';
-import type { ABSItem, CueIndex } from '$lib/types';
+import type { ABSItem, TimingIndex } from '$lib/types';
 
 export interface ReaderState {
 	loading: boolean;
 	error: string | null;
 	item: ABSItem | null;
-	cueIndex: CueIndex | null;
+	/** Timing source, from either subtitle cues or EPUB alignment. */
+	cueIndex: TimingIndex | null;
 	sentenceMap: Map<number, HTMLElement> | null;
 	activeSentenceId: number | null;
 }
@@ -28,7 +29,7 @@ function createReaderStore() {
 		setSentenceMap(map: Map<number, HTMLElement>) {
 			update((s) => ({ ...s, sentenceMap: map }));
 		},
-		setCueIndex(index: CueIndex) {
+		setCueIndex(index: TimingIndex) {
 			update((s) => ({ ...s, cueIndex: index }));
 		},
 		setItem(item: ABSItem) {
