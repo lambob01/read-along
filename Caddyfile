@@ -1,0 +1,16 @@
+{$SITE_DOMAIN:localhost} {
+	root * /srv
+	encode gzip
+	file_server
+
+	@abs path /abs /abs/*
+	handle @abs {
+		reverse_proxy {$ABS_ORIGIN:http://localhost:13378} {
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle {
+		try_files {path} /index.html
+	}
+}

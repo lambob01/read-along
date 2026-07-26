@@ -1,0 +1,17 @@
+services:
+  reader:
+    build: .
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - SITE_DOMAIN=${SITE_DOMAIN:-reader.localhost}
+      - ABS_ORIGIN=${ABS_ORIGIN:-http://localhost:13378}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

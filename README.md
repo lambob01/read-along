@@ -1,42 +1,116 @@
-# sv
+# Read-Along Reader
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A self-hosted audiobook player with synchronized transcript highlighting for [Audiobookshelf](https://audiobookshelf.org).
 
-## Creating a project
+## Features
 
-If you're seeing this, you've probably already done this step. Congrats!
+- **Synchronized highlighting** — text follows audio progress sentence by sentence
+- **Transcript support** — parses SRT and VTT subtitle files attached to your audiobooks
+- **CSS Highlight API** — smooth, zero-layout-shift highlighting with class fallback
+- **Chapter navigation** — prev/next buttons, dropdown menu with timestamps
+- **Keyboard shortcuts** — vim-style (`h/j/k/l/n/p`) and arrow keys for playback
+- **Dark mode** — Light, Dark, Sepia, OLED themes with persistent settings
+- **Customizable reader** — font size, line height, margins, highlight colors
+- **Mobile friendly** — responsive player bar, touch-sized controls, dynamic viewport height
+- **SPA** — single-page app, works behind any reverse proxy
 
-```sh
-# create a new project
-npx sv create my-app
+## Prerequisites
+
+- [Node.js](https://nodejs.org) 20+
+- An [Audiobookshelf](https://audiobookshelf.org) instance (v2.0+)
+- An ABS API token (generated from **Settings → API Token** in the ABS admin panel)
+
+## Quick Start (Local Dev)
+
+```bash
+git clone https://github.com/lambob01/read-along.git
+cd read-along
+cp .env.example .env.local
 ```
 
-To recreate this project with the same configuration:
+Edit `.env.local` — set `PUBLIC_ABS_ORIGIN` to your Audiobookshelf server URL:
 
-```sh
-# recreate this project
-npx sv@0.16.6 create --template minimal --types ts --add tailwindcss="plugins:none" vitest="usages:unit" prettier sveltekit-adapter="adapter:static" --no-install reader
+```env
+PUBLIC_ABS_ORIGIN=https://your-abs-server.com
 ```
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+```bash
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
+Open http://localhost:5173, enter your ABS server URL and API token, click **Connect**.
 
-To create a production version of your app:
+## Docker Deployment
 
-```sh
-npm run build
+The docker setup uses [Caddy](https://caddyserver.com) for auto-provisioned HTTPS via Let's Encrypt.
+
+### 1. Set your domain
+
+Create an A/AAAA record pointing your domain to your server's IP.
+
+### 2. Configure environment
+
+```bash
+export SITE_DOMAIN=reader.your-domain.com
+export ABS_ORIGIN=https://your-abs-server.com
 ```
 
-You can preview the production build with `npm run preview`.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SITE_DOMAIN` | Yes (for HTTPS) | `reader.localhost` | Domain Caddy serves on |
+| `ABS_ORIGIN` | Yes | `http://localhost:13378` | Your Audiobookshelf URL |
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+### 3. Start
+
+```bash
+docker compose up -d
+```
+
+The app will be available at `https://reader.your-domain.com` with automatic TLS.
+
+### Updating
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+## Configuration
+
+### Environment Variables (Dev)
+
+| Variable | Description |
+|---|---|
+| `PUBLIC_ABS_ORIGIN` | ABS server URL the Vite proxy forwards to |
+
+### Environment Variables (Docker)
+
+| Variable | Description |
+|---|---|
+| `SITE_DOMAIN` | Domain Caddy serves (for TLS) |
+| `ABS_ORIGIN` | ABS server URL Caddy proxies `/abs/*` to |
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `Space` / `k` | Play / Pause |
+| `←` / `h` | Rewind 5s / 10s |
+| `→` / `l` | Forward 10s |
+| `j` | Rewind 10s |
+| `n` | Next chapter |
+| `p` | Previous chapter |
+
+## Tech Stack
+
+- [SvelteKit](https://kit.svelte.dev) (SPA, adapter-static)
+- [Tailwind CSS v4](https://tailwindcss.com)
+- TypeScript
+- Vite
+- Vitest (unit tests)
+- Caddy (Docker deployment)
+
+## License
+
+MIT
