@@ -528,6 +528,8 @@
 		currentChapterIdx >= 0 ? chapters[currentChapterIdx]?.title || '' : chapters[0]?.title || ''
 	);
 
+	const volumePercent = $derived(Math.round($player.volume * 100));
+
 	const seekPercent = $derived(
 		$player.duration > 0 ? ($player.currentTime / $player.duration) * 100 : 0
 	);
@@ -978,8 +980,19 @@
 									aria-label="Close volume"
 								></button>
 								<div
-									class="absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 rounded border border-[var(--border)] bg-[var(--surface)] p-2 shadow-lg"
+									class="absolute bottom-full left-1/2 z-50 mb-1 flex -translate-x-1/2 flex-col items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-2.5 shadow-[var(--shadow-lg)]"
 								>
+									<span class="text-[11px] text-[var(--muted)] tabular-nums">
+										{volumePercent}%
+									</span>
+									<!--
+										`direction: rtl` is what puts loud at the top: a vertical
+										range runs along the block axis, so `vertical-lr` alone
+										starts at the minimum and fills downwards.
+										The track paints its own level, since an appearance-none
+										range is otherwise fully transparent and gave no feedback
+										at all.
+									-->
 									<input
 										type="range"
 										min="0"
@@ -987,8 +1000,9 @@
 										step="0.05"
 										value={$player.volume}
 										oninput={handleVolumeChange}
-										class="h-16 w-6 appearance-none rounded-full [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)]"
-										aria-label="Volume slider"
+										style="background: linear-gradient(to top, var(--accent) 0%, var(--accent) {volumePercent}%, var(--border) {volumePercent}%, var(--border) 100%)"
+										class="h-24 w-2 cursor-pointer appearance-none rounded-full [direction:rtl] [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
+										aria-label="Volume level"
 									/>
 								</div>
 							{/if}
