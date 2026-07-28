@@ -16,9 +16,9 @@ jobs:
       PUBLIC_ABS_ORIGIN: http://localhost:13378
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Matches the builder stage in the Dockerfile.
           node-version: 22
