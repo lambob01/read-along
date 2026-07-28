@@ -56,10 +56,10 @@ export SITE_DOMAIN=reader.your-domain.com
 export ABS_ORIGIN=https://your-abs-server.com
 ```
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SITE_DOMAIN` | Yes (for HTTPS) | `reader.localhost` | Domain Caddy serves on |
-| `ABS_ORIGIN` | Yes | `http://localhost:13378` | Your Audiobookshelf URL |
+| Variable      | Required        | Default                  | Description             |
+| ------------- | --------------- | ------------------------ | ----------------------- |
+| `SITE_DOMAIN` | Yes (for HTTPS) | `reader.localhost`       | Domain Caddy serves on  |
+| `ABS_ORIGIN`  | Yes             | `http://localhost:13378` | Your Audiobookshelf URL |
 
 ### 3. Start
 
@@ -80,27 +80,27 @@ docker compose up -d --build
 
 ### Environment Variables (Dev)
 
-| Variable | Description |
-|---|---|
+| Variable            | Description                               |
+| ------------------- | ----------------------------------------- |
 | `PUBLIC_ABS_ORIGIN` | ABS server URL the Vite proxy forwards to |
 
 ### Environment Variables (Docker)
 
-| Variable | Description |
-|---|---|
-| `SITE_DOMAIN` | Domain Caddy serves (for TLS) |
-| `ABS_ORIGIN` | ABS server URL Caddy proxies `/abs/*` to |
+| Variable      | Description                              |
+| ------------- | ---------------------------------------- |
+| `SITE_DOMAIN` | Domain Caddy serves (for TLS)            |
+| `ABS_ORIGIN`  | ABS server URL Caddy proxies `/abs/*` to |
 
 ## Keyboard Shortcuts
 
-| Key | Action |
-|---|---|
-| `Space` / `k` | Play / Pause |
-| `←` / `h` | Rewind 5s / 10s |
-| `→` / `l` | Forward 10s |
-| `j` | Rewind 10s |
-| `n` | Next chapter |
-| `p` | Previous chapter |
+| Key           | Action           |
+| ------------- | ---------------- |
+| `Space` / `k` | Play / Pause     |
+| `←` / `h`     | Rewind 5s / 10s  |
+| `→` / `l`     | Forward 10s      |
+| `j`           | Rewind 10s       |
+| `n`           | Next chapter     |
+| `p`           | Previous chapter |
 
 ## Tech Stack
 

@@ -9,10 +9,7 @@ function makeDoc(chapters: string[]): EpubDoc {
 		author: 'A',
 		language: 'ja',
 		chapters: chapters.map((html, i) => {
-			const doc = new DOMParser().parseFromString(
-				`<html><body>${html}</body></html>`,
-				'text/html'
-			);
+			const doc = new DOMParser().parseFromString(`<html><body>${html}</body></html>`, 'text/html');
 			return {
 				id: `ch${i}`,
 				order: i,
@@ -39,10 +36,13 @@ function setup(chapters: string[], rows: [string, number, number][]) {
 
 describe('renderEpub', () => {
 	it('creates one host section per chapter in spine order', () => {
-		const { container } = setup(['<p>一つ目。</p>', '<p>二つ目。</p>'], [
-			['一つ目。', 0, 1],
-			['二つ目。', 1, 2]
-		]);
+		const { container } = setup(
+			['<p>一つ目。</p>', '<p>二つ目。</p>'],
+			[
+				['一つ目。', 0, 1],
+				['二つ目。', 1, 2]
+			]
+		);
 
 		const sections = container.querySelectorAll('section.reader-chapter');
 		expect(sections.length).toBe(2);
@@ -51,10 +51,13 @@ describe('renderEpub', () => {
 	});
 
 	it('wraps each sentence in a span carrying its id and timing', () => {
-		const { handle, index } = setup(['<p>朝が来た。鳥が鳴いた。</p>'], [
-			['朝が来た。', 0, 2],
-			['鳥が鳴いた。', 2, 4]
-		]);
+		const { handle, index } = setup(
+			['<p>朝が来た。鳥が鳴いた。</p>'],
+			[
+				['朝が来た。', 0, 2],
+				['鳥が鳴いた。', 2, 4]
+			]
+		);
 
 		handle.ensureVisible(index.sentences[0].id);
 		const spans = handle.spansFor(index.sentences[0].id);
@@ -64,10 +67,13 @@ describe('renderEpub', () => {
 	});
 
 	it('preserves the rendered text of a block exactly', () => {
-		const { handle, container, index } = setup(['<p>朝が来た。鳥が鳴いた。</p>'], [
-			['朝が来た。', 0, 2],
-			['鳥が鳴いた。', 2, 4]
-		]);
+		const { handle, container, index } = setup(
+			['<p>朝が来た。鳥が鳴いた。</p>'],
+			[
+				['朝が来た。', 0, 2],
+				['鳥が鳴いた。', 2, 4]
+			]
+		);
 
 		handle.ensureVisible(index.sentences[0].id);
 		const block = container.querySelector('.reader-block')!;
@@ -96,9 +102,7 @@ describe('renderEpub', () => {
 		const spans = handle.spansFor(index.sentences[0].id);
 		// Text before, inside, and after the <em> are separate text nodes.
 		expect(spans.length).toBeGreaterThan(1);
-		expect(spans.every((s) => s.dataset.sid === String(index.sentences[0].id))).toBe(
-			true
-		);
+		expect(spans.every((s) => s.dataset.sid === String(index.sentences[0].id))).toBe(true);
 		expect(spans.map((s) => s.textContent).join('')).toBe('これは強調です。');
 	});
 
@@ -198,9 +202,7 @@ describe('renderEpub', () => {
 	});
 
 	it('clears the container on destroy', () => {
-		const { handle, container, index } = setup(['<p>本文である。</p>'], [
-			['本文である。', 0, 2]
-		]);
+		const { handle, container, index } = setup(['<p>本文である。</p>'], [['本文である。', 0, 2]]);
 
 		handle.ensureVisible(index.sentences[0].id);
 		handle.destroy();

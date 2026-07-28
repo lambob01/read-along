@@ -168,16 +168,9 @@ export function renderEpub(
 
 			// Wrap from the end backwards so earlier offsets stay valid as the
 			// tree is mutated.
-			const ordered = [...blockSentences].sort(
-				(a, b) => b.blockOffsetStart - a.blockOffsetStart
-			);
+			const ordered = [...blockSentences].sort((a, b) => b.blockOffsetStart - a.blockOffsetStart);
 			for (const s of ordered) {
-				const wrapped = wrapRange(
-					rendered,
-					s.blockOffsetStart,
-					s.blockOffsetEnd,
-					s
-				);
+				const wrapped = wrapRange(rendered, s.blockOffsetStart, s.blockOffsetEnd, s);
 				if (wrapped.length > 0) spans.set(s.id, wrapped);
 			}
 
@@ -238,4 +231,3 @@ export function renderEpub(
 		}
 	};
 }
-

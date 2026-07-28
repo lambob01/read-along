@@ -1,10 +1,7 @@
 import { writable, type Writable } from 'svelte/store';
 
 function persisted<T>(key: string, defaultValue: T): Writable<T> {
-	const stored =
-		typeof localStorage !== 'undefined'
-			? localStorage.getItem(key)
-			: null;
+	const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
 	const initial: T = stored ? JSON.parse(stored) : defaultValue;
 
 	const store = writable<T>(initial);
@@ -25,10 +22,11 @@ export interface ConnectionState {
 }
 
 function createConnectionStore() {
-	const { subscribe, set, update } = persisted<ConnectionState>(
-		'reader-connection',
-		{ url: '', token: '', connected: false }
-	);
+	const { subscribe, set, update } = persisted<ConnectionState>('reader-connection', {
+		url: '',
+		token: '',
+		connected: false
+	});
 
 	return {
 		subscribe,

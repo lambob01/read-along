@@ -11,10 +11,7 @@ function makeDoc(bodyHtml: string, chapters?: string[]): EpubDoc {
 		author: 'Test Author',
 		language: 'ja',
 		chapters: sources.map((html, i) => {
-			const doc = new DOMParser().parseFromString(
-				`<html><body>${html}</body></html>`,
-				'text/html'
-			);
+			const doc = new DOMParser().parseFromString(`<html><body>${html}</body></html>`, 'text/html');
 			return {
 				id: `ch${i}`,
 				order: i,
@@ -195,9 +192,7 @@ describe('alignment index invariants', () => {
 	}
 
 	it('emits sorted, non-overlapping, positive-width ranges', () => {
-		const doc = makeDoc(
-			'<h1>見出し</h1><p>一つ目の文。二つ目の文。</p><p>三つ目の文。</p>'
-		);
+		const doc = makeDoc('<h1>見出し</h1><p>一つ目の文。二つ目の文。</p><p>三つ目の文。</p>');
 		const cues = makeCues([
 			['一つ目の文。', 0, 2],
 			['二つ目の文。', 2, 4],
@@ -249,8 +244,6 @@ describe('alignment index invariants', () => {
 
 		expect(index.blocks.length).toBe(2);
 		expect(index.blocks[0].streamEnd).toBeGreaterThan(index.blocks[0].streamStart);
-		expect(index.blocks[1].streamStart).toBeGreaterThanOrEqual(
-			index.blocks[0].streamEnd
-		);
+		expect(index.blocks[1].streamStart).toBeGreaterThanOrEqual(index.blocks[0].streamEnd);
 	});
 });

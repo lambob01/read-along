@@ -2,12 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { alignmentKey, rebuildIndex } from '$lib/epub/cache';
 import type { AlignedSentence } from '$lib/types';
 
-function sentence(
-	id: number,
-	start: number,
-	end: number,
-	timed = true
-): AlignedSentence {
+function sentence(id: number, start: number, end: number, timed = true): AlignedSentence {
 	return {
 		id,
 		start,

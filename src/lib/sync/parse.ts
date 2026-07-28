@@ -1,7 +1,8 @@
 import type { RawCue } from '$lib/types';
 import { sanitizeText } from './sanitize';
 
-const SRT_CUE_RE = /(\d+)\s*\n(\d{1,2}:\d{2}:\d{2}[,.]\d{3}|\d{1,2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3}|\d{1,2}:\d{2}[,.]\d{3})\s*\n([\s\S]*?)(?=\n\n|\n*$)/g;
+const SRT_CUE_RE =
+	/(\d+)\s*\n(\d{1,2}:\d{2}:\d{2}[,.]\d{3}|\d{1,2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3}|\d{1,2}:\d{2}[,.]\d{3})\s*\n([\s\S]*?)(?=\n\n|\n*$)/g;
 
 const WEBVTT_HEADER = /^WEBVTT/i;
 

@@ -114,21 +114,15 @@ describe('resolveRelative', () => {
 	});
 
 	it('resolves nested hrefs', () => {
-		expect(resolveRelative('OEBPS/content.opf', 'text/ch2.xhtml')).toBe(
-			'OEBPS/text/ch2.xhtml'
-		);
+		expect(resolveRelative('OEBPS/content.opf', 'text/ch2.xhtml')).toBe('OEBPS/text/ch2.xhtml');
 	});
 
 	it('walks up with ..', () => {
-		expect(resolveRelative('OEBPS/text/ch2.xhtml', '../images/a.png')).toBe(
-			'OEBPS/images/a.png'
-		);
+		expect(resolveRelative('OEBPS/text/ch2.xhtml', '../images/a.png')).toBe('OEBPS/images/a.png');
 	});
 
 	it('strips fragments', () => {
-		expect(resolveRelative('OEBPS/content.opf', 'ch1.xhtml#frag')).toBe(
-			'OEBPS/ch1.xhtml'
-		);
+		expect(resolveRelative('OEBPS/content.opf', 'ch1.xhtml#frag')).toBe('OEBPS/ch1.xhtml');
 	});
 });
 

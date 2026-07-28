@@ -56,9 +56,7 @@ function normalize(path: string): string {
 export function resolveRelative(basePath: string, href: string): string {
 	const cleanHref = href.split('#')[0];
 	if (!cleanHref) return normalize(basePath);
-	const baseDir = basePath.includes('/')
-		? basePath.slice(0, basePath.lastIndexOf('/'))
-		: '';
+	const baseDir = basePath.includes('/') ? basePath.slice(0, basePath.lastIndexOf('/')) : '';
 	const joined = baseDir ? `${baseDir}/${cleanHref}` : cleanHref;
 	return normalize(joined);
 }

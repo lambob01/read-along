@@ -14,40 +14,26 @@ export async function login(
 	});
 }
 
-export async function getLibraries(
-	client: ABSClient
-): Promise<ABSLibrary[]> {
-	const data = await client.get<{ libraries: ABSLibrary[] }>(
-		'/api/libraries'
-	);
+export async function getLibraries(client: ABSClient): Promise<ABSLibrary[]> {
+	const data = await client.get<{ libraries: ABSLibrary[] }>('/api/libraries');
 	return data.libraries || [];
 }
 
-export async function getLibraryItems(
-	client: ABSClient,
-	libraryId: string
-): Promise<ABSItem[]> {
+export async function getLibraryItems(client: ABSClient, libraryId: string): Promise<ABSItem[]> {
 	const data = await client.get<{ results: ABSItem[] }>(
 		`/api/libraries/${libraryId}/items?sort=media.metadata.title`
 	);
 	return data.results || [];
 }
 
-export async function getItem(
-	client: ABSClient,
-	itemId: string
-): Promise<any> {
+export async function getItem(client: ABSClient, itemId: string): Promise<any> {
 	return client.get<any>(`/api/items/${itemId}?expanded=1`);
 }
 
-export async function getStreamSession(
-	client: ABSClient,
-	itemId: string
-): Promise<any> {
-	return client.post<any>(
-		`/api/items/${itemId}/play?forceDirectPlay=1`,
-		{ deviceInfo: { client: 'ReadAlongReader' } }
-	);
+export async function getStreamSession(client: ABSClient, itemId: string): Promise<any> {
+	return client.post<any>(`/api/items/${itemId}/play?forceDirectPlay=1`, {
+		deviceInfo: { client: 'ReadAlongReader' }
+	});
 }
 
 function collectFiles(item: any): any[] {
@@ -78,10 +64,7 @@ export interface ItemSources {
  * fallback. Sizes are returned so the alignment cache can be invalidated when
  * a file is replaced.
  */
-export async function getItemSources(
-	client: ABSClient,
-	itemId: string
-): Promise<ItemSources> {
+export async function getItemSources(client: ABSClient, itemId: string): Promise<ItemSources> {
 	const item = await getItem(client, itemId);
 	const allFiles = collectFiles(item);
 
@@ -104,11 +87,7 @@ export async function getItemSources(
 	};
 }
 
-export async function getFileText(
-	client: ABSClient,
-	itemId: string,
-	ino: string
-): Promise<string> {
+export async function getFileText(client: ABSClient, itemId: string, ino: string): Promise<string> {
 	return client.get<string>(`/api/items/${itemId}/file/${ino}`);
 }
 
@@ -120,10 +99,7 @@ export async function getFileBinary(
 	return client.getBinary(`/api/items/${itemId}/file/${ino}`);
 }
 
-export async function getTranscript(
-	client: ABSClient,
-	itemId: string
-): Promise<string> {
+export async function getTranscript(client: ABSClient, itemId: string): Promise<string> {
 	const { subIno } = await getItemSources(client, itemId);
 
 	if (subIno) {

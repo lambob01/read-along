@@ -36,10 +36,7 @@ function createRecentStore() {
 		record(entry: Omit<RecentBook, 'updatedAt'>) {
 			update((list) => {
 				const rest = list.filter((b) => b.itemId !== entry.itemId);
-				const next = [{ ...entry, updatedAt: Date.now() }, ...rest].slice(
-					0,
-					MAX_ENTRIES
-				);
+				const next = [{ ...entry, updatedAt: Date.now() }, ...rest].slice(0, MAX_ENTRIES);
 				persist(next);
 				return next;
 			});

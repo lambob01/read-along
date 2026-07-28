@@ -128,12 +128,7 @@ const MIN_ANCHOR_LEN = 4;
  * never re-anchor. MIN_ANCHOR_LEN floors it, since very short runs match by
  * chance in Japanese and would produce spurious jumps.
  */
-function findAnchor(
-	hay: string[],
-	from: number,
-	needle: string[],
-	needleFrom: number
-): number {
+function findAnchor(hay: string[], from: number, needle: string[], needleFrom: number): number {
 	const remaining = needle.length - needleFrom;
 	if (remaining < MIN_ANCHOR_LEN) return -1;
 	const len = Math.min(ANCHOR_LEN, remaining);
@@ -255,9 +250,7 @@ export function alignEpubToCues(
 			}
 		}
 
-		sentences.push(
-			makeSentence(i, src, streamStart, streamCursor, start, end, timed)
-		);
+		sentences.push(makeSentence(i, src, streamStart, streamCursor, start, end, timed));
 	}
 
 	return finalize(blocks, sentences, cues.length, matchedCueIdx.size);
@@ -362,6 +355,3 @@ function finalize(
 
 	return { blocks, sentences, timed, starts, ends, stats };
 }
-
-
-

@@ -25,11 +25,7 @@ export class ABSClient {
 		this.token = token;
 	}
 
-	private async request<T>(
-		method: string,
-		path: string,
-		body?: unknown
-	): Promise<T> {
+	private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
 		const url = `${this.baseUrl}${path}`;
 		const headers: Record<string, string> = {
 			Authorization: `Bearer ${this.token}`
@@ -55,11 +51,7 @@ export class ABSClient {
 
 		if (!response.ok) {
 			const text = await response.text().catch(() => null);
-			throw new ABSError(
-				`Request failed: ${response.status}`,
-				response.status,
-				text
-			);
+			throw new ABSError(`Request failed: ${response.status}`, response.status, text);
 		}
 
 		const contentType = response.headers.get('content-type') || '';

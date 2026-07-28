@@ -125,7 +125,7 @@ export function parseEpub(buffer: ArrayBuffer): EpubDoc {
 
 	const spineEl = opf.querySelector('spine');
 	const ncxId = spineEl?.getAttribute('toc');
-	const ncxHref = ncxId ? manifest.get(ncxId)?.href ?? null : null;
+	const ncxHref = ncxId ? (manifest.get(ncxId)?.href ?? null) : null;
 
 	const titles = buildTitleMap(archive, opfPath, navHref, ncxHref);
 

@@ -228,15 +228,11 @@ describe('buildIndex', () => {
 		const paragraphs = [
 			{
 				id: 0,
-				sentences: [
-					{ id: 1, start: 5, end: 7, text: 'B.', cueIds: [1] }
-				]
+				sentences: [{ id: 1, start: 5, end: 7, text: 'B.', cueIds: [1] }]
 			},
 			{
 				id: 1,
-				sentences: [
-					{ id: 0, start: 1, end: 3, text: 'A.', cueIds: [0] }
-				]
+				sentences: [{ id: 0, start: 1, end: 3, text: 'A.', cueIds: [0] }]
 			}
 		];
 

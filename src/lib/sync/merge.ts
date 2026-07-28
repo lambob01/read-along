@@ -4,15 +4,10 @@ import { isNonSpeech } from './sanitize';
 const SENTENCE_END_RE = /[.!?\u2026\u00BB"」』]$/;
 const DIALOGUE_START_RE = /^[-—]/;
 
-export function mergeCues(
-	cues: RawCue[],
-	opts: MergeOptions = {}
-): Paragraph[] {
+export function mergeCues(cues: RawCue[], opts: MergeOptions = {}): Paragraph[] {
 	const { gapThreshold = 1.2, showNonSpeech = false } = opts;
 
-	const filtered = showNonSpeech
-		? cues
-		: cues.filter((c) => !isNonSpeech(c.text));
+	const filtered = showNonSpeech ? cues : cues.filter((c) => !isNonSpeech(c.text));
 
 	if (filtered.length === 0) return [];
 

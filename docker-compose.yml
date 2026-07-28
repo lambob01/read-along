@@ -2,8 +2,8 @@ services:
   reader:
     build: .
     ports:
-      - "80:80"
-      - "443:443"
+      - '80:80'
+      - '443:443'
     environment:
       - SITE_DOMAIN=${SITE_DOMAIN:-reader.localhost}
       - ABS_ORIGIN=${ABS_ORIGIN:-http://localhost:13378}
