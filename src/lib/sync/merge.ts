@@ -1,7 +1,19 @@
 import type { RawCue, Sentence, Paragraph, MergeOptions } from '$lib/types';
 import { isNonSpeech } from './sanitize';
 
-const SENTENCE_END_RE = /[.!?\u2026\u00BB"」』]$/;
+/**
+ * Punctuation that ends a sentence, used to decide whether the next cue is a
+ * continuation of this one.
+ *
+ * Covers the Japanese terminators as well as the Latin ones. Without 。 every
+ * line of a Japanese transcript looked unterminated, so consecutive cues were
+ * merged until an audio gap broke them up — a whole paragraph would light up
+ * as one "sentence", and mining it wrote that whole run into the card.
+ *
+ * The closing brackets stand alone deliberately: Japanese convention omits the
+ * full stop before them, so 「そうか」 ends a sentence with no 。 to match.
+ */
+const SENTENCE_END_RE = /[.!?\u3002\uFF0E\uFF01\uFF1F\u2026\u00BB"」』]$/;
 const DIALOGUE_START_RE = /^[-—]/;
 
 export function mergeCues(cues: RawCue[], opts: MergeOptions = {}): Paragraph[] {

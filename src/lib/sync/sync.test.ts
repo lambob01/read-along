@@ -213,6 +213,70 @@ describe('mergeCues', () => {
 		expect(paragraphs[0].sentences).toHaveLength(2);
 	});
 
+	it('splits Japanese sentences on 。', () => {
+		// Back-to-back cues with no audio gap: only the punctuation can
+		// separate them. Before 。 was recognised these merged into one
+		// "sentence" that highlighted — and mined — as a single block.
+		const cues: RawCue[] = [
+			{ index: 0, start: 5, end: 8, text: 'これは五秒から八秒までの文です。' },
+			{ index: 1, start: 8, end: 11, text: 'つぎは八秒から十一秒までの文。' }
+		];
+		const sentences = mergeCues(cues)[0].sentences;
+
+		expect(sentences).toHaveLength(2);
+		expect(sentences[0].text).toBe('これは五秒から八秒までの文です。');
+		expect(sentences[1].text).toBe('つぎは八秒から十一秒までの文。');
+	});
+
+	it('splits on fullwidth ！ and ？', () => {
+		const cues: RawCue[] = [
+			{ index: 0, start: 0, end: 1, text: 'まさか！' },
+			{ index: 1, start: 1, end: 2, text: 'どうして？' },
+			{ index: 2, start: 2, end: 3, text: 'わからない。' }
+		];
+
+		expect(mergeCues(cues)[0].sentences).toHaveLength(3);
+	});
+
+	it('treats a closing bracket as terminal, since 。 is dropped before it', () => {
+		// 「そうか」 is correct Japanese; there is no 。 to match, so the
+		// bracket has to end the sentence on its own.
+		const cues: RawCue[] = [
+			{ index: 0, start: 0, end: 1, text: '「そうか」' },
+			{ index: 1, start: 1, end: 2, text: '彼は頷いた。' }
+		];
+
+		expect(mergeCues(cues)[0].sentences).toHaveLength(2);
+	});
+
+	it('still merges unterminated Japanese cues into one sentence', () => {
+		// Cues that end without punctuation are continuations, in any script.
+		const cues: RawCue[] = [
+			{ index: 0, start: 0, end: 1, text: '長い文章が' },
+			{ index: 1, start: 1, end: 2, text: '二つに分かれて' },
+			{ index: 2, start: 2, end: 3, text: 'いる' }
+		];
+		const sentences = mergeCues(cues)[0].sentences;
+
+		expect(sentences).toHaveLength(1);
+		expect(sentences[0].text).toBe('長い文章が 二つに分かれて いる');
+	});
+
+	it('does not absorb a terminated cue into a running sentence', () => {
+		// Pre-existing behaviour, independent of script: a cue ending in
+		// punctuation always starts its own sentence, so a sentence whose
+		// final cue carries the 。 is split off from its own opening. The
+		// Latin case is asserted by 'assigns correct cueIds' below.
+		const cues: RawCue[] = [
+			{ index: 0, start: 0, end: 1, text: '長い文章が' },
+			{ index: 1, start: 1, end: 2, text: '分かれています。' }
+		];
+		const sentences = mergeCues(cues)[0].sentences;
+
+		expect(sentences).toHaveLength(2);
+		expect(sentences[0].text).toBe('長い文章が');
+	});
+
 	it('assigns correct cueIds to merged sentences', () => {
 		const cues = makeCues('Hello', 'world', 'today.');
 		const paragraphs = mergeCues(cues);
