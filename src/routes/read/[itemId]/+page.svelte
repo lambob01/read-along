@@ -19,6 +19,8 @@
 	import { renderEpub, type EpubRenderHandle } from '$lib/reader/epubRenderer';
 	import { loadTextSource, type TextSourceMode } from '$lib/epub/source';
 	import { createHighlighter, type HighlightHandle } from '$lib/reader/highlight';
+	import { primeCapture, releaseCapture } from '$lib/anki/capture';
+	import { mineSentence } from '$lib/anki/mine';
 
 	// Route params are typed as possibly-undefined; this page cannot render
 	// without an id, so narrow once here rather than at every call site.
@@ -79,6 +81,82 @@
 		gapThreshold = s.gapThreshold;
 		showNonSpeech = s.showNonSpeech;
 	});
+
+	// --- Anki mining ---------------------------------------------------------
+
+	/**
+	 * The highlight clears in the gaps between cues, but a line is usually
+	 * mined a beat after it finishes. Holding the last highlighted sentence
+	 * keeps the button aimed at what the user just heard.
+	 */
+	let lastActiveId = $state<number | null>(null);
+	let mining = $state(false);
+	/** Capture progress, 0..1 — a mine takes as long as the line does. */
+	let mineProgress = $state(0);
+	/** The first mine of a book loads its index, which has no percentage. */
+	let minePhase = $state<'preparing' | 'recording'>('recording');
+	let toast = $state<{ kind: 'ok' | 'err'; text: string } | null>(null);
+	let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+	const sentenceById = $derived.by(() => {
+		const map = new Map<number, { id: number; start: number; end: number; text?: string }>();
+		for (const s of $reader.cueIndex?.sentences ?? []) map.set(s.id, s);
+		return map;
+	});
+
+	const mineTarget = $derived(
+		lastActiveId === null ? null : (sentenceById.get(lastActiveId) ?? null)
+	);
+	const canMine = $derived($settings.ankiEnabled && mineTarget !== null && !mining);
+
+	$effect(() => {
+		const id = $reader.activeSentenceId;
+		if (id !== null) lastActiveId = id;
+	});
+
+	function showToast(kind: 'ok' | 'err', text: string) {
+		if (toastTimer) clearTimeout(toastTimer);
+		toast = { kind, text };
+		toastTimer = setTimeout(() => (toast = null), kind === 'err' ? 8000 : 4000);
+	}
+
+	async function mineCurrent() {
+		const target = mineTarget;
+		if (!target || mining) return;
+		revealChrome();
+		mining = true;
+		mineProgress = 0;
+		minePhase = 'preparing';
+		// Must happen on the click itself: an AudioContext only leaves the
+		// suspended state from within a user gesture, and a suspended one
+		// produces no frames for the capture to collect.
+		primeCapture();
+		try {
+			const result = await mineSentence(
+				{
+					itemId,
+					audioSrc: player.getSrc(),
+					text: target.text ?? '',
+					start: target.start,
+					end: target.end,
+					onProgress: (f) => (mineProgress = f),
+					onPhase: (p) => (minePhase = p)
+				},
+				$settings
+			);
+			const kb = Math.round(result.byteLength / 1024);
+			const verb = result.action === 'created' ? 'Created card' : 'Updated last card';
+			showToast('ok', `${verb} · ${kb} KB`);
+		} catch (err) {
+			// Logged as well as shown: the toast has to stay short, and the
+			// stack is what identifies which step gave up.
+			console.error('[readalong] mine failed', err);
+			showToast('err', err instanceof Error ? err.message : 'Mining failed');
+		} finally {
+			mining = false;
+			mineProgress = 0;
+		}
+	}
 
 	/**
 	 * A book that has been tuned keeps its own offset; everything else follows
@@ -316,6 +394,10 @@
 		}
 		if (saveBookmarkInterval) clearInterval(saveBookmarkInterval);
 		if (chromeTimer) clearTimeout(chromeTimer);
+		if (toastTimer) clearTimeout(toastTimer);
+		// The capture tap is deliberately left attached: it belongs to the
+		// singleton audio element, and createMediaElementSource cannot be
+		// re-run on an element that already has one.
 		window.removeEventListener('keydown', handleKeyDown);
 		// The audio element is a singleton that outlives this page, so the
 		// controller's listeners have to come off with it.
@@ -324,6 +406,9 @@
 		highlighter?.reset();
 		epubRender?.destroy();
 		epubRender = null;
+		// The capture element holds this book's audio index; a different book
+		// needs a different one.
+		releaseCapture();
 		reader.reset();
 		player.pause();
 		if (sleepInterval) clearInterval(sleepInterval);
@@ -507,6 +592,9 @@
 			case ']':
 				nudgeOffset(0.1);
 				revealChrome();
+				break;
+			case 'a':
+				if ($settings.ankiEnabled) mineCurrent();
 				break;
 		}
 	}
@@ -978,6 +1066,58 @@
 							{/each}
 						</select>
 
+						{#if $settings.ankiEnabled}
+							<button
+								onclick={mineCurrent}
+								disabled={!canMine}
+								class="flex min-h-[40px] items-center gap-1 rounded border border-[var(--border)] px-2 py-1.5 text-xs text-[var(--fg)] transition-colors hover:bg-[var(--border)] disabled:opacity-40 sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm"
+								aria-label="Mine this sentence to Anki"
+								title="Mine this sentence to Anki (a)"
+							>
+								{#if mining}
+									<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+										<circle
+											cx="12"
+											cy="12"
+											r="9"
+											stroke="currentColor"
+											stroke-width="2"
+											opacity="0.25"
+										/>
+										<path
+											d="M21 12a9 9 0 00-9-9"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+										/>
+									</svg>
+								{:else}
+									<svg
+										class="h-4 w-4"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+										stroke-width="2"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M12 4v12m0 0l-4-4m4 4l4-4M5 19h14"
+										/>
+									</svg>
+								{/if}
+								<span class="hidden sm:inline">
+									{#if !mining}
+										Mine
+									{:else if minePhase === 'preparing'}
+										Loading
+									{:else}
+										{Math.round(mineProgress * 100)}%
+									{/if}
+								</span>
+							</button>
+						{/if}
+
 						<button
 							onclick={toggleAutoScroll}
 							class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {autoScrollLocked
@@ -996,6 +1136,25 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Mining result. Sits above the player bar so it stays readable when
+		     the chrome slides away. -->
+		{#if toast}
+			<div
+				class="pointer-events-none absolute inset-x-0 bottom-28 z-40 flex justify-center px-4"
+				role="status"
+				aria-live="polite"
+			>
+				<div
+					class="max-w-md rounded-lg border px-3 py-2 text-sm shadow-[var(--shadow-lg)] {toast.kind ===
+					'err'
+						? 'border-red-500/40 bg-[var(--surface)] text-red-500'
+						: 'border-[var(--accent)] bg-[var(--surface)] text-[var(--fg)]'}"
+				>
+					{toast.text}
+				</div>
+			</div>
+		{/if}
 
 		<!-- Settings sheet -->
 		{#if showSettings}

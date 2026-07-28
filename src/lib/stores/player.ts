@@ -10,6 +10,7 @@ export interface PlayerState {
 }
 
 let audio: HTMLAudioElement | null = null;
+let currentSrc = '';
 
 function getAudio(): HTMLAudioElement | null {
 	if (typeof Audio === 'undefined') return null;
@@ -64,11 +65,15 @@ function createPlayerStore() {
 		},
 		setRate(rate: number) {
 			const clamped = Math.max(0.5, Math.min(3, rate));
-			withAudio((a) => { a.playbackRate = clamped; }, undefined);
+			withAudio((a) => {
+				a.playbackRate = clamped;
+			}, undefined);
 		},
 		setVolume(vol: number) {
 			const clamped = Math.max(0, Math.min(1, vol));
-			withAudio((a) => { a.volume = clamped; }, undefined);
+			withAudio((a) => {
+				a.volume = clamped;
+			}, undefined);
 			update((s) => ({ ...s, volume: clamped }));
 		},
 		skipBack(seconds: number = 10) {
@@ -85,6 +90,7 @@ function createPlayerStore() {
 			update((s) => ({ ...s, chapter: n }));
 		},
 		setSrc(url: string) {
+			currentSrc = url;
 			withAudio((a) => {
 				a.src = url;
 				a.load();
@@ -93,6 +99,14 @@ function createPlayerStore() {
 		},
 		getAudioElement(): HTMLAudioElement | null {
 			return getAudio();
+		},
+		/**
+		 * The URL as it was handed in, not the element's resolved `src`. Anki
+		 * capture re-plays this on its own element, and the element's own value
+		 * is absolutized and empty before the first `setSrc`.
+		 */
+		getSrc(): string {
+			return currentSrc;
 		},
 		saveBookmark(itemId: string, time: number) {
 			if (typeof localStorage === 'undefined') return;

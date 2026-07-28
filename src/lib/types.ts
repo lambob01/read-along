@@ -24,7 +24,11 @@ export interface Paragraph {
  * EPUB-derived `AlignedIndex` satisfy it, so the ticker works with either.
  */
 export interface TimingIndex {
-	sentences: { id: number; start: number; end: number }[];
+	/**
+	 * `text` is not used by the ticker — timing is the whole contract — but both
+	 * real indexes carry it, and Anki mining needs the line it is clipping.
+	 */
+	sentences: { id: number; start: number; end: number; text?: string }[];
 	starts: Float64Array;
 	ends: Float64Array;
 }

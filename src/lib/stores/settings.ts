@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { DEFAULT_ANKI_URL } from '$lib/anki/connect';
 
 export const themeOptions = [
 	{ value: 'light', label: 'Light' },
@@ -22,6 +23,19 @@ export const fontOptions = [
 
 export type HighlightStyle = 'background' | 'underline' | 'text' | 'none';
 
+/**
+ * `update-last` attaches the clip to the note you just made in Anki (typically
+ * from a dictionary popup), which is the usual mining order: look the word up
+ * first, then grab the audio for the line it came from. `create` is for
+ * mining a line on its own.
+ */
+export type AnkiMode = 'update-last' | 'create';
+
+export const ankiModeOptions = [
+	{ value: 'update-last', label: 'Update last card' },
+	{ value: 'create', label: 'Create new card' }
+] as const;
+
 export interface SettingsState {
 	theme: ThemeName;
 	fontSize: number;
@@ -43,6 +57,32 @@ export interface SettingsState {
 	timingOffset: number;
 	gapThreshold: number;
 	showNonSpeech: boolean;
+
+	// --- Anki mining ---------------------------------------------------------
+	/**
+	 * Off by default because turning it on routes the audio element through a
+	 * Web Audio graph permanently, which is not worth doing for users who do
+	 * not mine.
+	 */
+	ankiEnabled: boolean;
+	ankiUrl: string;
+	/** Only needed when AnkiConnect is configured with an apiKey. */
+	ankiKey: string;
+	ankiMode: AnkiMode;
+	/** Anki search that identifies the "last card"; newest match wins. */
+	ankiLastCardQuery: string;
+	/** Field the `[sound:...]` tag is written to. Required in both modes. */
+	ankiAudioField: string;
+	/** Field the sentence text is written to. Required only in create mode. */
+	ankiSentenceField: string;
+	/** In update mode, also overwrite the sentence field with the line. */
+	ankiUpdateSentence: boolean;
+	ankiDeck: string;
+	ankiModel: string;
+	ankiTags: string;
+	/** Seconds of lead-in kept before the sentence, to cover alignment slop. */
+	ankiPadStart: number;
+	ankiPadEnd: number;
 }
 
 export const defaultSettings: SettingsState = {
@@ -62,7 +102,20 @@ export const defaultSettings: SettingsState = {
 	autoHideChrome: true,
 	timingOffset: 0,
 	gapThreshold: 1.2,
-	showNonSpeech: false
+	showNonSpeech: false,
+	ankiEnabled: false,
+	ankiUrl: DEFAULT_ANKI_URL,
+	ankiKey: '',
+	ankiMode: 'update-last',
+	ankiLastCardQuery: 'added:1',
+	ankiAudioField: '',
+	ankiSentenceField: '',
+	ankiUpdateSentence: false,
+	ankiDeck: '',
+	ankiModel: '',
+	ankiTags: 'read-along',
+	ankiPadStart: 0.25,
+	ankiPadEnd: 0.4
 };
 
 const STORAGE_KEY = 'reader-settings';

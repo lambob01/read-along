@@ -86,6 +86,44 @@ Both paths are fully styled for every `hlStyle` in `app.css` — a `::highlight(
 - `offsets` — per-book sync offset in seconds, keyed by item id. Alignment drift belongs to a recording/transcript pair, so a tuned book keeps its own value; untuned books fall back to `settings.timingOffset`. The in-memory store is the source of truth for both reads and writes (`hydrate()` re-reads storage).
 - `connection` — persists ABS URL and token to `localStorage`
 
+### Anki mining (`src/lib/anki/`)
+
+The reader's Mine button clips the current sentence's audio and sends it to
+Anki over AnkiConnect, either attaching it to the last card created (default,
+for the look-up-then-mine flow) or creating a new card. Off by default;
+configured under Settings → Anki.
+
+`capture.ts` obtains the audio by **re-playing it**. Clipping the source file
+directly is not possible — the books are M4B, and an MP4 byte range has no
+container header to decode — and taking it from a rolling buffer of what has
+been played only works for lines the user happens to have just heard. So a
+throwaway `Audio` element seeks to the sentence and plays it through a
+zero-gain Web Audio tap while an AudioWorklet collects the PCM. This works for
+any timestamp in the book, played or not, and for any format the browser
+supports. It costs one sentence-length wait per mine, which is why the button
+shows a percentage.
+
+The recording always overshoots (the seek lands on a frame boundary at or
+before the target, and playback is polled at 50ms), so `cutSegment` trims it
+using per-chunk anchors tying frame offsets to media timestamps. Ends outside
+the anchors are clamped rather than failing — the overshoot is padding.
+
+The capture element is deliberately separate from `player`'s singleton:
+`createMediaElementSource` is irreversible for an element's lifetime, so
+routing the reader's own audio through a graph would risk silencing playback
+whenever the context could not be resumed.
+
+`encode.ts` writes mono 64kbps MP3 via lamejs, falling back to WAV at sample
+rates LAME cannot express. Size matters because these clips land in a synced
+collection — a 5s line is ~40 KB as MP3 against ~480 KB as WAV.
+
+AnkiConnect is called straight from the browser, so **the page's origin must be
+in AnkiConnect's `webCorsOriginList`** (exact match, port included). That is the
+most common failure and `connect.ts` names it in the error.
+
+"Last card" is `findNotes` over a configurable query (default `added:1`) taking
+the largest id — Anki note ids are creation timestamps in ms.
+
 ### Reader chrome
 
 The reader is modelled on ttu-ebook-reader: header and player bar are absolutely positioned over a full-height scroller and slide away while audio plays (`settings.autoHideChrome`), leaving a slim progress line with percentage and time remaining. Tapping the text toggles them. Chrome floats rather than sits in flow so hiding it does not reflow the text and lose the reading position.

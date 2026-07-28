@@ -3,9 +3,13 @@
 		settings,
 		themeOptions,
 		fontOptions,
+		ankiModeOptions,
 		type SettingsState,
-		type HighlightStyle
+		type HighlightStyle,
+		type AnkiMode
 	} from '$lib/stores/settings';
+	import { ankiVersion, deckNames, modelNames, modelFieldNames } from '$lib/anki/connect';
+	import { ankiTarget } from '$lib/anki/mine';
 
 	interface Props {
 		/**
@@ -20,12 +24,13 @@
 
 	let { showSubtitleOptions = true, only = null }: Props = $props();
 
-	type SectionId = 'appearance' | 'reading' | 'sync';
+	type SectionId = 'appearance' | 'reading' | 'sync' | 'anki';
 
 	const sections: { id: SectionId; label: string }[] = [
 		{ id: 'appearance', label: 'Appearance' },
 		{ id: 'reading', label: 'Reading' },
-		{ id: 'sync', label: 'Sync' }
+		{ id: 'sync', label: 'Sync' },
+		{ id: 'anki', label: 'Anki' }
 	];
 
 	let active = $state<SectionId>('appearance');
@@ -33,6 +38,53 @@
 
 	function patch(fn: (s: SettingsState) => Partial<SettingsState>) {
 		settings.update((s) => ({ ...s, ...fn(s) }));
+	}
+
+	// --- Anki connection -----------------------------------------------------
+	// Deck, note type and field names are pulled from the live collection so the
+	// user picks from what exists instead of typing names that must match
+	// exactly. Everything degrades to a text input when Anki is unreachable.
+
+	let ankiState = $state<'idle' | 'testing' | 'ok' | 'error'>('idle');
+	let ankiMessage = $state('');
+	let decks = $state<string[]>([]);
+	let models = $state<string[]>([]);
+	let fields = $state<string[]>([]);
+
+	async function testAnki() {
+		ankiState = 'testing';
+		ankiMessage = '';
+		try {
+			const target = ankiTarget($settings);
+			const version = await ankiVersion(target);
+			[decks, models] = await Promise.all([deckNames(target), modelNames(target)]);
+			ankiState = 'ok';
+			ankiMessage = `Connected to AnkiConnect v${version} — ${decks.length} decks.`;
+			if ($settings.ankiModel) await loadFields($settings.ankiModel);
+		} catch (err) {
+			ankiState = 'error';
+			ankiMessage = err instanceof Error ? err.message : 'Could not reach Anki.';
+			decks = [];
+			models = [];
+			fields = [];
+		}
+	}
+
+	async function loadFields(model: string) {
+		if (!model) {
+			fields = [];
+			return;
+		}
+		try {
+			fields = await modelFieldNames(ankiTarget($settings), model);
+		} catch {
+			fields = [];
+		}
+	}
+
+	function chooseModel(model: string) {
+		patch(() => ({ ankiModel: model }));
+		loadFields(model);
 	}
 
 	const lineHeights = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.2, 2.5];
@@ -68,6 +120,40 @@
 		{#if hint}
 			<span class="mt-0.5 block text-xs text-[var(--muted)]">{hint}</span>
 		{/if}
+	</div>
+{/snippet}
+
+{#snippet fieldRow(
+	id: string,
+	label: string,
+	hint: string,
+	value: string,
+	onChange: (v: string) => void
+)}
+	<div>
+		<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for={id}>{label}</label>
+		{#if fields.length > 0}
+			<select
+				{id}
+				{value}
+				onchange={(e) => onChange(e.currentTarget.value)}
+				class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+			>
+				<option value="">Select…</option>
+				{#each fields as f}
+					<option value={f}>{f}</option>
+				{/each}
+			</select>
+		{:else}
+			<input
+				{id}
+				type="text"
+				{value}
+				oninput={(e) => onChange(e.currentTarget.value)}
+				class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+			/>
+		{/if}
+		<p class="mt-1 text-xs text-[var(--muted)]">{hint}</p>
 	</div>
 {/snippet}
 
@@ -370,6 +456,248 @@
 					class="h-5 w-5 shrink-0 accent-[var(--accent)]"
 				/>
 			</label>
+		{/if}
+	{/if}
+
+	{#if visible === 'anki'}
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Enable mining', 'Adds a mine button to the reader')}
+			<input
+				type="checkbox"
+				checked={$settings.ankiEnabled}
+				onchange={(e) => patch(() => ({ ankiEnabled: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+
+		{#if $settings.ankiEnabled}
+			<div>
+				<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="anki-url">
+					AnkiConnect address
+				</label>
+				<input
+					id="anki-url"
+					type="url"
+					value={$settings.ankiUrl}
+					oninput={(e) => patch(() => ({ ankiUrl: e.currentTarget.value }))}
+					placeholder="http://localhost:8765"
+					class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+				/>
+				<div class="mt-2 flex items-center gap-2">
+					<button
+						onclick={testAnki}
+						disabled={ankiState === 'testing'}
+						class="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--fg)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
+					>
+						{ankiState === 'testing' ? 'Connecting…' : 'Connect'}
+					</button>
+					{#if ankiState === 'ok'}
+						<span class="text-xs text-[var(--accent)]">Connected</span>
+					{/if}
+				</div>
+				{#if ankiMessage}
+					<p class="mt-2 text-xs {ankiState === 'error' ? 'text-red-500' : 'text-[var(--muted)]'}">
+						{ankiMessage}
+					</p>
+				{/if}
+				<p class="mt-2 text-xs text-[var(--muted)]">
+					Anki must be open on this device with the AnkiConnect add-on, and this site's address
+					listed in AnkiConnect's <code>webCorsOriginList</code>.
+				</p>
+			</div>
+
+			<div>
+				<span class="mb-2 block text-sm font-medium text-[var(--fg)]">When mining</span>
+				<div class="grid grid-cols-2 gap-2">
+					{#each ankiModeOptions as m}
+						<button
+							onclick={() => patch(() => ({ ankiMode: m.value as AnkiMode }))}
+							class="rounded-lg border px-2 py-2 text-xs font-medium transition-colors {m.value ===
+							$settings.ankiMode
+								? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+								: 'border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]'}"
+						>
+							{m.label}
+						</button>
+					{/each}
+				</div>
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					{#if $settings.ankiMode === 'update-last'}
+						Attaches the clip to the most recent card you made — look the word up first, then mine
+						the line it came from.
+					{:else}
+						Makes a new card holding the sentence and its audio.
+					{/if}
+				</p>
+			</div>
+
+			<div>
+				<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="anki-model">
+					Note type
+				</label>
+				{#if models.length > 0}
+					<select
+						id="anki-model"
+						value={$settings.ankiModel}
+						onchange={(e) => chooseModel(e.currentTarget.value)}
+						class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+					>
+						<option value="">Select…</option>
+						{#each models as m}
+							<option value={m}>{m}</option>
+						{/each}
+					</select>
+				{:else}
+					<input
+						id="anki-model"
+						type="text"
+						value={$settings.ankiModel}
+						oninput={(e) => patch(() => ({ ankiModel: e.currentTarget.value }))}
+						placeholder="Connect to list your note types"
+						class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+					/>
+				{/if}
+				{#if $settings.ankiMode === 'update-last'}
+					<p class="mt-1 text-xs text-[var(--muted)]">
+						Only used to list field names below. The card that gets updated is whichever one you
+						made last.
+					</p>
+				{/if}
+			</div>
+
+			{#if $settings.ankiMode === 'create'}
+				<div>
+					<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="anki-deck">Deck</label
+					>
+					{#if decks.length > 0}
+						<select
+							id="anki-deck"
+							value={$settings.ankiDeck}
+							onchange={(e) => patch(() => ({ ankiDeck: e.currentTarget.value }))}
+							class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+						>
+							<option value="">Select…</option>
+							{#each decks as d}
+								<option value={d}>{d}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							id="anki-deck"
+							type="text"
+							value={$settings.ankiDeck}
+							oninput={(e) => patch(() => ({ ankiDeck: e.currentTarget.value }))}
+							placeholder="Connect to list your decks"
+							class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+						/>
+					{/if}
+				</div>
+			{/if}
+
+			{@render fieldRow(
+				'anki-audio-field',
+				'Audio field',
+				'Receives the [sound:…] tag',
+				$settings.ankiAudioField,
+				(v) => patch(() => ({ ankiAudioField: v }))
+			)}
+
+			{#if $settings.ankiMode === 'create' || $settings.ankiUpdateSentence}
+				{@render fieldRow(
+					'anki-sentence-field',
+					'Sentence field',
+					'Receives the sentence text',
+					$settings.ankiSentenceField,
+					(v) => patch(() => ({ ankiSentenceField: v }))
+				)}
+			{/if}
+
+			{#if $settings.ankiMode === 'update-last'}
+				<label class="flex items-center justify-between gap-4">
+					{@render row('Also write the sentence', 'Overwrites the sentence field on that card')}
+					<input
+						type="checkbox"
+						checked={$settings.ankiUpdateSentence}
+						onchange={(e) => patch(() => ({ ankiUpdateSentence: e.currentTarget.checked }))}
+						class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+					/>
+				</label>
+
+				<div>
+					<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="anki-query">
+						Last card search
+					</label>
+					<input
+						id="anki-query"
+						type="text"
+						value={$settings.ankiLastCardQuery}
+						oninput={(e) => patch(() => ({ ankiLastCardQuery: e.currentTarget.value }))}
+						placeholder="added:1"
+						class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-sm text-[var(--fg)]"
+					/>
+					<p class="mt-1 text-xs text-[var(--muted)]">
+						An Anki search; the newest note it matches is the one updated. Narrow it with something
+						like <code>added:1 deck:Mining</code> if you add cards from elsewhere too.
+					</p>
+				</div>
+			{/if}
+
+			<div>
+				<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="anki-tags">Tags</label>
+				<input
+					id="anki-tags"
+					type="text"
+					value={$settings.ankiTags}
+					oninput={(e) => patch(() => ({ ankiTags: e.currentTarget.value }))}
+					placeholder="read-along"
+					class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+				/>
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					Space or comma separated. Leave blank for none.
+				</p>
+			</div>
+
+			<div>
+				<label class="mb-2 flex items-baseline justify-between" for="anki-pad-start">
+					<span class="text-sm font-medium text-[var(--fg)]">Lead-in</span>
+					<span class="text-xs text-[var(--muted)] tabular-nums">
+						{$settings.ankiPadStart.toFixed(2)}s
+					</span>
+				</label>
+				<input
+					id="anki-pad-start"
+					type="range"
+					min="0"
+					max="1.5"
+					step="0.05"
+					value={$settings.ankiPadStart}
+					oninput={(e) => patch(() => ({ ankiPadStart: parseFloat(e.currentTarget.value) }))}
+					class="w-full accent-[var(--accent)]"
+				/>
+			</div>
+
+			<div>
+				<label class="mb-2 flex items-baseline justify-between" for="anki-pad-end">
+					<span class="text-sm font-medium text-[var(--fg)]">Tail</span>
+					<span class="text-xs text-[var(--muted)] tabular-nums">
+						{$settings.ankiPadEnd.toFixed(2)}s
+					</span>
+				</label>
+				<input
+					id="anki-pad-end"
+					type="range"
+					min="0"
+					max="1.5"
+					step="0.05"
+					value={$settings.ankiPadEnd}
+					oninput={(e) => patch(() => ({ ankiPadEnd: parseFloat(e.currentTarget.value) }))}
+					class="w-full accent-[var(--accent)]"
+				/>
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					Extra audio kept around the line, so a slightly early or late timestamp does not clip a
+					word.
+				</p>
+			</div>
 		{/if}
 	{/if}
 
