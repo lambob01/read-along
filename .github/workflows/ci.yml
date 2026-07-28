@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    env:
+      # svelte-check and the build both read this through $env/static/public and
+      # fail if it is unset. Only the SvelteKit dev proxy ever uses the value,
+      # so any syntactically valid origin does here.
+      PUBLIC_ABS_ORIGIN: http://localhost:13378
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the builder stage in the Dockerfile.
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Format
+        run: npm run lint
+
+      - name: Types
+        run: npm run check
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
