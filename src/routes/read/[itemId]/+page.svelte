@@ -181,7 +181,9 @@
 			return;
 		}
 
-		highlighter = createHighlighter();
+		// Scoping the sweep to the rendered text keeps it off the rest of the page;
+		// contentEl is not bound yet, so it is resolved lazily on each call.
+		highlighter = createHighlighter({ getRoot: () => contentEl ?? document });
 		window.addEventListener('keydown', handleKeyDown);
 
 		const restart = $page.url.searchParams.get('restart') === '1';

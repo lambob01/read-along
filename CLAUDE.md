@@ -72,6 +72,12 @@ Mounts only the active chapter ± 1 neighbours (chapter windowing) to avoid stal
 
 Uses the CSS Highlight API (`CSS.highlights`) when available, with a class-toggle fallback. The reader page's `$effect` calls `highlighter.activateMany(spans)` or `highlighter.activate(el)` whenever `reader.activeSentenceId` changes.
 
+**WebKit uses the class path, not the Highlight API.** WebKit does not reliably invalidate the region a custom highlight previously painted, so clearing or replacing the active range leaves the finished sentence visibly lit while the next one paints as well — the highlight appears to accumulate. Detection is `navigator.vendor === 'Apple Computer, Inc.'`, which covers every browser on iOS since they are all WebKit, not just Safari. `preferClassFallback` overrides the detection for tests.
+
+The class path's `reset` sweeps `getRoot()` for `.hl-active` rather than trusting the element references it was handed. Chapter windowing can unmount and remount a chapter between two activations, which would otherwise strand the class on spans the handle no longer references.
+
+Both paths are fully styled for every `hlStyle` in `app.css` — a `::highlight()` rule and a matching `.hl-active` rule per style — so switching engines does not change appearance.
+
 ### Stores (`src/lib/stores/`)
 
 - `player` — wraps a singleton `HTMLAudioElement`; exposes `play/pause/seek/skipBack/skipForward/setRate/setVolume/saveBookmark/getBookmark`
