@@ -6,7 +6,9 @@
 	import { player } from '$lib/stores/player';
 	import { reader } from '$lib/stores/reader';
 	import { recent } from '$lib/stores/recent';
+	import { offsets, clampOffset, MAX_OFFSET } from '$lib/stores/offsets';
 	import { settings, defaultSettings } from '$lib/stores/settings';
+	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import { ABSClient } from '$lib/abs/client';
 	import { getItem, getStreamSession } from '$lib/abs/api';
 	import { mergeCues } from '$lib/sync/merge';
@@ -24,10 +26,14 @@
 
 	let scrollerEl = $state<HTMLDivElement>();
 	let contentEl = $state<HTMLDivElement>();
-	let playerEl = $state<HTMLAudioElement>();
 	let showSettings = $state(false);
 	let showChapterDropdown = $state(false);
 	let showVolumeSlider = $state(false);
+	let showOffsetPanel = $state(false);
+
+	/** ttu-style immersive chrome: the header and player bar fade out while reading. */
+	let chromeVisible = $state(true);
+	let chromeTimer: ReturnType<typeof setTimeout> | null = null;
 
 	type SleepOption = number | 'chapter';
 	const sleepPresets: { label: string; value: SleepOption | null }[] = [
@@ -74,6 +80,25 @@
 		showNonSpeech = s.showNonSpeech;
 	});
 
+	/**
+	 * A book that has been tuned keeps its own offset; everything else follows
+	 * the global default, so fixing one bad transcript does not skew the rest.
+	 */
+	const bookOffset = $derived($offsets[itemId]);
+	const hasBookOffset = $derived(typeof bookOffset === 'number');
+	const effectiveOffset = $derived(hasBookOffset ? bookOffset : $settings.timingOffset);
+
+	$effect(() => {
+		syncController?.setOffset(effectiveOffset);
+	});
+
+	$effect(() => {
+		autoScroller?.setOptions({
+			anchor: $settings.scrollAnchor,
+			smooth: $settings.smoothScroll
+		});
+	});
+
 	$effect(() => {
 		const id = $reader.activeSentenceId;
 		if (!highlighter) return;
@@ -109,6 +134,47 @@
 		}
 	});
 
+	// Chrome hides only while audio is actually playing: a paused reader is
+	// being looked at, not read along with.
+	$effect(() => {
+		if (!$settings.autoHideChrome || !$player.playing) {
+			if (chromeTimer) clearTimeout(chromeTimer);
+			chromeTimer = null;
+			chromeVisible = true;
+			return;
+		}
+		scheduleChromeHide();
+	});
+
+	function scheduleChromeHide() {
+		if (chromeTimer) clearTimeout(chromeTimer);
+		chromeTimer = setTimeout(() => {
+			// Never hide chrome out from under an open popover.
+			if (showSettings || showChapterDropdown || showVolumeSlider || showOffsetPanel) {
+				scheduleChromeHide();
+				return;
+			}
+			chromeVisible = false;
+		}, 2500);
+	}
+
+	function revealChrome() {
+		chromeVisible = true;
+		if ($settings.autoHideChrome && $player.playing) scheduleChromeHide();
+	}
+
+	/** Tapping the page toggles chrome, matching ttu's reader. */
+	function handleReaderTap(e: MouseEvent) {
+		// A tap that lands on a text selection is the user reading, not toggling.
+		if (window.getSelection()?.toString()) return;
+		if (chromeVisible) {
+			chromeVisible = false;
+			if (chromeTimer) clearTimeout(chromeTimer);
+		} else {
+			revealChrome();
+		}
+	}
+
 	onMount(async () => {
 		if (!connectionToken) {
 			await goto('/');
@@ -117,6 +183,8 @@
 
 		highlighter = createHighlighter();
 		window.addEventListener('keydown', handleKeyDown);
+
+		const restart = $page.url.searchParams.get('restart') === '1';
 
 		try {
 			const client = new ABSClient('/abs', connectionToken);
@@ -130,8 +198,8 @@
 			if (audioSrc) {
 				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
 				player.setSrc(src);
-				const bookmark = player.getBookmark(itemId);
-				if (bookmark && bookmark > 0) {
+				const bookmark = restart ? 0 : (player.getBookmark(itemId) ?? 0);
+				if (bookmark > 0) {
 					setTimeout(() => player.seek(bookmark), 500);
 				}
 			}
@@ -181,23 +249,7 @@
 					// Mount the opening chapters so there is text before playback.
 					epubRender.ensureVisible(index.sentences[0]?.id ?? 0);
 
-					const audioEl = player.getAudioElement();
-					if (audioEl) {
-						syncController = createSyncController(
-							audioEl,
-							timingIndex,
-							(id) => {
-								reader.setActiveSentence(id);
-							}
-						);
-						syncController.start();
-					}
-
-					if (scrollerEl) {
-						autoScroller = createAutoScroller(scrollerEl, (id) =>
-							epubRender?.elementFor(id)
-						);
-					}
+					attachSync(timingIndex, (id) => epubRender?.elementFor(id));
 				});
 			} else if (source && source.cues && source.cues.length > 0) {
 				const cues = source.cues;
@@ -210,41 +262,44 @@
 
 				requestAnimationFrame(() => {
 					if (!contentEl) return;
-					const sentenceMap = renderParagraphs(
-						cueIndex.paragraphs,
-						contentEl
-					);
+					const sentenceMap = renderParagraphs(cueIndex.paragraphs, contentEl);
 					reader.setSentenceMap(sentenceMap);
 
-					const audioEl = player.getAudioElement();
-					if (audioEl) {
-						syncController = createSyncController(
-							audioEl,
-							cueIndex,
-							(id) => {
-								reader.setActiveSentence(id);
-							}
-						);
-						syncController.start();
-					}
-
-					if (scrollerEl) {
-						autoScroller = createAutoScroller(
-							scrollerEl,
-							(id) => sentenceMap.get(id)
-						);
-					}
+					attachSync(cueIndex, (id) => sentenceMap.get(id));
 				});
 			}
 
 			reader.setLoading(false);
 		} catch (err) {
-			errorState =
-				err instanceof Error ? err.message : 'Failed to load item';
+			errorState = err instanceof Error ? err.message : 'Failed to load item';
 		} finally {
 			loading = false;
 		}
 	});
+
+	/** Shared by both text pipelines; only the element lookup differs. */
+	function attachSync(
+		timingIndex: Parameters<typeof createSyncController>[1],
+		elementFor: (id: number) => HTMLElement | undefined
+	) {
+		const audioEl = player.getAudioElement();
+		if (audioEl) {
+			syncController = createSyncController(
+				audioEl,
+				timingIndex,
+				(id) => reader.setActiveSentence(id),
+				effectiveOffset
+			);
+			syncController.start();
+		}
+
+		if (scrollerEl) {
+			autoScroller = createAutoScroller(scrollerEl, elementFor, {
+				anchor: $settings.scrollAnchor,
+				smooth: $settings.smoothScroll
+			});
+		}
+	}
 
 	onDestroy(() => {
 		if ($player.currentTime > 0) {
@@ -258,16 +313,19 @@
 			});
 		}
 		if (saveBookmarkInterval) clearInterval(saveBookmarkInterval);
-		syncController?.stop();
+		if (chromeTimer) clearTimeout(chromeTimer);
+		window.removeEventListener('keydown', handleKeyDown);
+		// The audio element is a singleton that outlives this page, so the
+		// controller's listeners have to come off with it.
+		syncController?.destroy();
 		autoScroller?.destroy();
 		highlighter?.reset();
 		epubRender?.destroy();
 		epubRender = null;
 		reader.reset();
 		player.pause();
-		clearInterval(sleepInterval!);
+		if (sleepInterval) clearInterval(sleepInterval);
 	});
-	
 
 	function handlePlayPause() {
 		if ($player.playing) {
@@ -287,11 +345,6 @@
 		player.setRate(parseFloat(select.value));
 	}
 
-	function handleChapterChange(e: Event) {
-		const select = e.target as HTMLSelectElement;
-		player.setChapter(parseInt(select.value));
-	}
-
 	function toggleAutoScroll() {
 		autoScrollLocked = !autoScrollLocked;
 		if (!autoScrollLocked && $reader.activeSentenceId !== null) {
@@ -299,8 +352,20 @@
 		}
 	}
 
+	function nudgeOffset(delta: number) {
+		offsets.set(itemId, clampOffset(effectiveOffset + delta));
+	}
+
+	function setOffsetValue(value: number) {
+		offsets.set(itemId, value);
+	}
+
+	function clearBookOffset() {
+		offsets.clear(itemId);
+	}
+
 	function setSleepTimer(opt: SleepOption | null) {
-		clearInterval(sleepInterval!);
+		if (sleepInterval) clearInterval(sleepInterval);
 		sleepTimer = opt;
 		if (opt === null) {
 			sleepEndTime = null;
@@ -315,7 +380,7 @@
 				const next = chapters[idx + 1];
 				if (next && $player.currentTime >= next.start) {
 					player.pause();
-					clearInterval(sleepInterval!);
+					if (sleepInterval) clearInterval(sleepInterval);
 					sleepTimer = null;
 					sleepEndTime = null;
 					sleepRemaining = '';
@@ -331,7 +396,7 @@
 				sleepRemaining = `${m}:${s.toString().padStart(2, '0')}`;
 				if (left <= 0) {
 					player.pause();
-					clearInterval(sleepInterval!);
+					if (sleepInterval) clearInterval(sleepInterval);
 					sleepTimer = null;
 					sleepEndTime = null;
 					sleepRemaining = '';
@@ -354,11 +419,21 @@
 		return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
 	}
 
+	function formatRemaining(s: number): string {
+		if (!Number.isFinite(s) || s <= 0) return '';
+		const h = Math.floor(s / 3600);
+		const m = Math.round((s % 3600) / 60);
+		if (h > 0) return `${h}h ${m}m left`;
+		return `${m}m left`;
+	}
+
+	function formatOffset(v: number): string {
+		return `${v > 0 ? '+' : ''}${v.toFixed(2)}s`;
+	}
+
 	const chapters = $derived($reader.item?.media?.chapters || []);
 	const currentChapterIdx = $derived(
-		chapters.length > 0
-			? chapters.findLastIndex((c) => $player.currentTime >= c.start)
-			: -1
+		chapters.length > 0 ? chapters.findLastIndex((c) => $player.currentTime >= c.start) : -1
 	);
 	const currentChapter = $derived(
 		currentChapterIdx >= 0 ? chapters[currentChapterIdx]?.title || '' : chapters[0]?.title || ''
@@ -366,6 +441,10 @@
 
 	const seekPercent = $derived(
 		$player.duration > 0 ? ($player.currentTime / $player.duration) * 100 : 0
+	);
+
+	const remainingLabel = $derived(
+		$player.duration > 0 ? formatRemaining($player.duration - $player.currentTime) : ''
 	);
 
 	function goToNextChapter() {
@@ -384,31 +463,53 @@
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
-		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLButtonElement) return;
+		if (
+			e.target instanceof HTMLInputElement ||
+			e.target instanceof HTMLSelectElement ||
+			e.target instanceof HTMLButtonElement
+		)
+			return;
 		switch (e.key) {
-			case ' ': e.preventDefault(); handlePlayPause(); break;
-			case 'ArrowLeft': player.skipBack(10); break;
-			case 'ArrowRight': player.skipForward(10); break;
-			case 'j': player.skipBack(10); break;
-			case 'l': player.skipForward(10); break;
-			case 'k': handlePlayPause(); break;
-			case 'h': player.skipBack(5); break;
-			case 'n': goToNextChapter(); break;
-			case 'p': goToPrevChapter(); break;
+			case ' ':
+				e.preventDefault();
+				handlePlayPause();
+				break;
+			case 'ArrowLeft':
+				player.skipBack(10);
+				break;
+			case 'ArrowRight':
+				player.skipForward(10);
+				break;
+			case 'j':
+				player.skipBack(10);
+				break;
+			case 'l':
+				player.skipForward(10);
+				break;
+			case 'k':
+				handlePlayPause();
+				break;
+			case 'h':
+				player.skipBack(5);
+				break;
+			case 'n':
+				goToNextChapter();
+				break;
+			case 'p':
+				goToPrevChapter();
+				break;
+			case '[':
+				nudgeOffset(-0.1);
+				revealChrome();
+				break;
+			case ']':
+				nudgeOffset(0.1);
+				revealChrome();
+				break;
 		}
 	}
 
 	const rateOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-	const fontSizes = Array.from({ length: 13 }, (_, i) => 0.8 + i * 0.1);
-	const lineHeights = [
-		1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.2, 2.5
-	];
-	const themes: { value: string; label: string }[] = [
-		{ value: 'light', label: 'Light' },
-		{ value: 'dark', label: 'Dark' },
-		{ value: 'sepia', label: 'Sepia' },
-		{ value: 'oled', label: 'OLED' }
-	];
 </script>
 
 {#if loading}
@@ -426,18 +527,26 @@
 		</button>
 	</div>
 {:else}
-	<div class="flex h-dvh flex-col bg-[var(--bg)]">
+	<div class="relative flex h-dvh flex-col overflow-hidden bg-[var(--bg)]">
 		<!-- Top bar -->
-		<div class="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+		<div
+			class="absolute inset-x-0 top-0 z-30 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)]/90 px-3 py-2 backdrop-blur transition-transform duration-200 {chromeVisible
+				? 'translate-y-0'
+				: '-translate-y-full'}"
+		>
 			<button
-				onclick={() => goto('/library')}
+				onclick={() => goto(`/book/${itemId}`)}
 				class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
-				aria-label="Back to library"
+				aria-label="Back to book details"
 			>
-				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-					><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"
-					/></svg
-				>
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M15 19l-7-7 7-7"
+					/>
+				</svg>
 			</button>
 
 			<div class="min-w-0 flex-1">
@@ -446,27 +555,145 @@
 				</p>
 				<p class="truncate text-xs text-[var(--muted)]">
 					{$reader.item?.media?.metadata?.authorName || ''}
-					{#if currentChapter} &middot; {currentChapter}{/if}
+					{#if currentChapter}&middot; {currentChapter}{/if}
 				</p>
 			</div>
+
+			<!-- Sync offset -->
+			{#if $reader.cueIndex}
+				<div class="relative">
+					<button
+						onclick={() => (showOffsetPanel = !showOffsetPanel)}
+						class="flex items-center gap-1 rounded border px-2 py-1.5 text-xs tabular-nums transition-colors {effectiveOffset !==
+						0
+							? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+							: 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]'}"
+						aria-label="Adjust sync offset"
+					>
+						<svg
+							class="h-3.5 w-3.5"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+						>
+							<circle cx="12" cy="12" r="9" />
+							<path stroke-linecap="round" d="M12 7v5l3 2" />
+						</svg>
+						{formatOffset(effectiveOffset)}
+					</button>
+
+					{#if showOffsetPanel}
+						<button
+							class="fixed inset-0 z-40 cursor-default"
+							onclick={() => (showOffsetPanel = false)}
+							aria-label="Close sync offset"
+						></button>
+						<div
+							class="absolute top-full right-0 z-50 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)]"
+						>
+							<div class="mb-2 flex items-baseline justify-between">
+								<span class="text-sm font-medium text-[var(--fg)]">Sync offset</span>
+								<span class="text-sm text-[var(--accent)] tabular-nums">
+									{formatOffset(effectiveOffset)}
+								</span>
+							</div>
+
+							<div class="flex items-center gap-2">
+								<button
+									onclick={() => nudgeOffset(-0.1)}
+									class="h-9 w-9 shrink-0 rounded border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+									aria-label="Move highlight later"
+								>
+									−
+								</button>
+								<input
+									type="range"
+									min={-MAX_OFFSET}
+									max={MAX_OFFSET}
+									step="0.05"
+									value={effectiveOffset}
+									oninput={(e) => setOffsetValue(parseFloat(e.currentTarget.value))}
+									class="min-w-0 flex-1 accent-[var(--accent)]"
+									aria-label="Sync offset in seconds"
+								/>
+								<button
+									onclick={() => nudgeOffset(0.1)}
+									class="h-9 w-9 shrink-0 rounded border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+									aria-label="Move highlight earlier"
+								>
+									+
+								</button>
+							</div>
+
+							<p class="mt-2 text-xs text-[var(--muted)]">
+								{#if effectiveOffset > 0}
+									Highlight runs {effectiveOffset.toFixed(2)}s ahead of the audio.
+								{:else if effectiveOffset < 0}
+									Highlight runs {Math.abs(effectiveOffset).toFixed(2)}s behind the audio.
+								{:else}
+									Highlight follows the audio exactly.
+								{/if}
+							</p>
+
+							<div class="mt-2 flex items-center justify-between gap-2">
+								<span class="text-xs text-[var(--muted)]">
+									{hasBookOffset ? 'Saved for this book' : 'Using global default'}
+								</span>
+								<div class="flex gap-2">
+									<button
+										onclick={() => setOffsetValue(0)}
+										class="rounded px-2 py-1 text-xs text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+									>
+										Zero
+									</button>
+									{#if hasBookOffset}
+										<button
+											onclick={clearBookOffset}
+											class="rounded px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+										>
+											Use default
+										</button>
+									{/if}
+								</div>
+							</div>
+							<p class="mt-2 text-xs text-[var(--muted)]">Keys: [ and ] adjust by 0.1s.</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
 
 			<button
 				onclick={() => (showSettings = !showSettings)}
 				class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
 				aria-label="Settings"
 			>
-				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-					><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-					/><circle cx="12" cy="12" r="3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-					/></svg
-				>
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+					/>
+					<circle
+						cx="12"
+						cy="12"
+						r="3"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+					/>
+				</svg>
 			</button>
 		</div>
 
-		<!-- Reader area -->
+		<!-- Reader area. Fills the frame; chrome floats above it so hiding the
+		     chrome does not reflow the text and lose the reading position. -->
 		<div
 			bind:this={scrollerEl}
-			class="flex-1 overflow-y-auto px-[var(--theme-side-margins)] py-6"
+			onclick={handleReaderTap}
+			role="presentation"
+			class="flex-1 overflow-y-auto px-[var(--theme-side-margins)] pt-16 pb-28"
 		>
 			{#if sourceNotice && $reader.cueIndex}
 				<!--
@@ -484,8 +711,8 @@
 					class="mx-auto mb-4 rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
 					style="max-width: var(--theme-max-width);"
 				>
-					{Math.round(coverage * 100)}% of the book is synced to the audio.
-					Unsynced passages are shown but will not highlight.
+					{Math.round(coverage * 100)}% of the book is synced to the audio. Unsynced passages are
+					shown but will not highlight.
 				</div>
 			{/if}
 
@@ -514,12 +741,33 @@
 			{/if}
 		</div>
 
+		<!-- Slim progress line, the only chrome that survives immersive mode. -->
+		<div class="pointer-events-none absolute inset-x-0 bottom-0 z-20">
+			<div
+				class="flex items-center justify-between px-3 pb-1 text-[11px] text-[var(--muted)] tabular-nums transition-opacity duration-200 {chromeVisible
+					? 'opacity-0'
+					: 'opacity-100'}"
+			>
+				<span>{Math.round(seekPercent)}%</span>
+				<span>{remainingLabel}</span>
+			</div>
+			<div class="h-0.5 w-full bg-[var(--border)]">
+				<div class="h-full bg-[var(--accent)]" style="width: {seekPercent}%"></div>
+			</div>
+		</div>
+
 		<!-- Player bar -->
-		<div class="border-t border-[var(--border)] bg-[var(--surface)] px-2 py-2 sm:px-3">
+		<div
+			class="absolute inset-x-0 bottom-0 z-30 border-t border-[var(--border)] bg-[var(--surface)] px-2 py-2 transition-transform duration-200 sm:px-3 {chromeVisible
+				? 'translate-y-0'
+				: 'translate-y-full'}"
+		>
 			<div class="mx-auto flex max-w-2xl flex-col gap-1.5 sm:gap-2">
 				<!-- Seek bar -->
 				<div class="flex items-center gap-1.5 sm:gap-2">
-					<span class="text-xs tabular-nums text-[var(--muted)] min-w-[48px] text-right sm:min-w-[52px]">
+					<span
+						class="min-w-[48px] text-right text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]"
+					>
 						{formatTime($player.currentTime)}
 					</span>
 					<input
@@ -529,9 +777,10 @@
 						value={$player.currentTime}
 						oninput={handleSeek}
 						style="background: linear-gradient(to right, var(--accent) 0%, var(--accent) {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
-						class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer"
+						class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
+						aria-label="Seek"
 					/>
-					<span class="text-xs tabular-nums text-[var(--muted)] min-w-[48px] sm:min-w-[52px]">
+					<span class="min-w-[48px] text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]">
 						{formatTime($player.duration)}
 					</span>
 				</div>
@@ -542,59 +791,67 @@
 					<div class="flex items-center justify-center gap-0.5 sm:gap-1">
 						<button
 							onclick={goToPrevChapter}
-							class="rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] min-w-[42px] min-h-[42px] sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center"
+							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
 							aria-label="Previous chapter"
 						>
 							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M16.67 0l2.83 2.829-9.339 9.175 9.339 9.167-2.83 2.829-12.17-11.996z"/>
+								<path d="M16.67 0l2.83 2.829-9.339 9.175 9.339 9.167-2.83 2.829-12.17-11.996z" />
 							</svg>
 						</button>
 
 						<button
 							onclick={() => player.skipBack(10)}
-							class="rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] min-w-[42px] min-h-[42px] sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center"
+							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
 							aria-label="Skip back 10s"
 						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-								><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"
-								/></svg
-							>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"
+								/>
+							</svg>
 						</button>
 
 						<button
 							onclick={handlePlayPause}
-							class="rounded-full p-2.5 sm:p-3 text-[var(--fg)] hover:bg-[var(--border)] min-w-[48px] min-h-[48px] sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center"
+							class="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-full p-2.5 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px] sm:p-3"
 							aria-label={$player.playing ? 'Pause' : 'Play'}
 						>
 							{#if $player.playing}
-								<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24"
-									><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" /></svg
-								>
+								<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+									<path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+								</svg>
 							{:else}
-								<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24"
-									><path d="M8 5v14l11-7z" /></svg
-								>
+								<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+									<path d="M8 5v14l11-7z" />
+								</svg>
 							{/if}
 						</button>
 
 						<button
 							onclick={() => player.skipForward(10)}
-							class="rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] min-w-[42px] min-h-[42px] sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center"
+							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
 							aria-label="Skip forward 10s"
 						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-								><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.933 12.8a1 1 0 000-1.6L6.6 7.2A1 1 0 005 8v8a1 1 0 001.6.8l5.333-4zM19.933 12.8a1 1 0 000-1.6l-5.333-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.333-4z"
-								/></svg
-							>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M11.933 12.8a1 1 0 000-1.6L6.6 7.2A1 1 0 005 8v8a1 1 0 001.6.8l5.333-4zM19.933 12.8a1 1 0 000-1.6l-5.333-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.333-4z"
+								/>
+							</svg>
 						</button>
 
 						<button
 							onclick={goToNextChapter}
-							class="rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] min-w-[42px] min-h-[42px] sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center"
+							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
 							aria-label="Next chapter"
 						>
 							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M7.33 24l-2.83-2.829 9.339-9.175-9.339-9.167 2.83-2.829 12.17 11.996z"/>
+								<path d="M7.33 24l-2.83-2.829 9.339-9.175-9.339-9.167 2.83-2.829 12.17 11.996z" />
 							</svg>
 						</button>
 					</div>
@@ -605,11 +862,21 @@
 						<div class="relative">
 							<button
 								onclick={() => (showVolumeSlider = !showVolumeSlider)}
-								class="rounded p-1.5 text-[var(--fg)] hover:bg-[var(--border)] min-w-[40px] min-h-[40px] sm:min-h-[44px] flex items-center justify-center"
+								class="flex min-h-[40px] min-w-[40px] items-center justify-center rounded p-1.5 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px]"
 								aria-label="Volume"
 							>
-								<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-									<path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.5H4a1 1 0 00-1 1v5a1 1 0 001 1h2.5l4 4V4.5l-4 4z"/>
+								<svg
+									class="h-4 w-4"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+									stroke-width="2"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.5H4a1 1 0 00-1 1v5a1 1 0 001 1h2.5l4 4V4.5l-4 4z"
+									/>
 								</svg>
 							</button>
 							{#if showVolumeSlider}
@@ -618,7 +885,9 @@
 									onclick={() => (showVolumeSlider = false)}
 									aria-label="Close volume"
 								></button>
-								<div class="absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 rounded border border-[var(--border)] bg-[var(--surface)] p-2 shadow-lg">
+								<div
+									class="absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 rounded border border-[var(--border)] bg-[var(--surface)] p-2 shadow-lg"
+								>
 									<input
 										type="range"
 										min="0"
@@ -626,7 +895,7 @@
 										step="0.05"
 										value={$player.volume}
 										oninput={handleVolumeChange}
-										class="h-16 w-6 appearance-none rounded-full [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:cursor-pointer"
+										class="h-16 w-6 appearance-none rounded-full [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)]"
 										aria-label="Volume slider"
 									/>
 								</div>
@@ -643,7 +912,7 @@
 									else if (v === 'chapter') setSleepTimer('chapter');
 									else setSleepTimer(parseInt(v));
 								}}
-								class="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 sm:px-2 py-1.5 text-xs sm:text-sm text-[var(--fg)] min-h-[40px] sm:min-h-[44px] cursor-pointer appearance-none"
+								class="min-h-[40px] cursor-pointer appearance-none rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1.5 text-xs text-[var(--fg)] sm:min-h-[44px] sm:px-2 sm:text-sm"
 								aria-label="Sleep timer"
 							>
 								{#each sleepPresets as p}
@@ -651,7 +920,11 @@
 								{/each}
 							</select>
 							{#if sleepRemaining}
-								<span class="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-[var(--accent)]">{sleepRemaining}</span>
+								<span
+									class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs whitespace-nowrap text-[var(--accent)]"
+								>
+									{sleepRemaining}
+								</span>
 							{/if}
 						</div>
 
@@ -659,7 +932,7 @@
 							<div class="relative">
 								<button
 									onclick={() => (showChapterDropdown = !showChapterDropdown)}
-									class="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs sm:text-sm text-[var(--fg)] min-h-[40px] sm:min-h-[44px] max-w-[140px] sm:max-w-[180px] truncate hover:bg-[var(--border)]"
+									class="min-h-[40px] max-w-[140px] truncate rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:max-w-[180px] sm:text-sm"
 									aria-label="Chapter"
 								>
 									{currentChapter || 'Chapters'}
@@ -670,14 +943,19 @@
 										onclick={() => (showChapterDropdown = false)}
 										aria-label="Close chapter list"
 									></button>
-									<div class="absolute {false ? '' : 'bottom-full mb-1'} left-1/2 z-50 max-h-56 w-72 -translate-x-1/2 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:left-0 sm:w-64 sm:translate-x-0">
+									<div
+										class="absolute bottom-full left-1/2 z-50 mb-1 max-h-56 w-72 -translate-x-1/2 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:left-0 sm:w-64 sm:translate-x-0"
+									>
 										{#each chapters as ch, i}
 											<button
 												onclick={() => {
 													jumpToChapter(i);
 													showChapterDropdown = false;
 												}}
-												class="block w-full px-3 py-2.5 sm:py-2 text-left text-sm text-[var(--fg)] hover:bg-[var(--border)] {i === currentChapterIdx ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : ''}"
+												class="block w-full px-3 py-2.5 text-left text-sm text-[var(--fg)] hover:bg-[var(--border)] sm:py-2 {i ===
+												currentChapterIdx
+													? 'bg-[var(--accent-soft)] font-medium text-[var(--accent)]'
+													: ''}"
 											>
 												{formatTime(ch.start)} — {ch.title}
 											</button>
@@ -690,7 +968,7 @@
 						<select
 							value={$player.rate}
 							onchange={handleRateChange}
-							class="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 sm:px-2 py-1.5 text-xs sm:text-sm text-[var(--fg)] min-h-[40px] sm:min-h-[44px]"
+							class="min-h-[40px] rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1.5 text-xs text-[var(--fg)] sm:min-h-[44px] sm:px-2 sm:text-sm"
 							aria-label="Playback speed"
 						>
 							{#each rateOptions as r}
@@ -700,12 +978,16 @@
 
 						<button
 							onclick={toggleAutoScroll}
-							class="rounded border px-2 sm:px-3 py-1.5 text-xs sm:text-sm min-h-[40px] sm:min-h-[44px] flex items-center gap-1 sm:gap-1.5 {autoScrollLocked
+							class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {autoScrollLocked
 								? 'border-[var(--border)] text-[var(--muted)]'
 								: 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'}"
 							aria-label={autoScrollLocked ? 'Enable auto-scroll' : 'Disable auto-scroll'}
 						>
-							<span class="inline-block h-2 w-2 rounded-full {autoScrollLocked ? 'bg-[var(--muted)]' : 'bg-[var(--accent)]'}"></span>
+							<span
+								class="inline-block h-2 w-2 rounded-full {autoScrollLocked
+									? 'bg-[var(--muted)]'
+									: 'bg-[var(--accent)]'}"
+							></span>
 							<span class="hidden sm:inline">Autoscroll</span>
 						</button>
 					</div>
@@ -713,221 +995,43 @@
 			</div>
 		</div>
 
-		<!-- Settings panel -->
+		<!-- Settings sheet -->
 		{#if showSettings}
-			<div
-				class="fixed inset-0 z-50 flex justify-end"
-				role="dialog"
-				aria-label="Settings"
-			>
+			<div class="fixed inset-0 z-50 flex justify-end" role="dialog" aria-label="Settings">
 				<button
 					class="absolute inset-0 bg-black/30"
 					onclick={() => (showSettings = false)}
 					aria-label="Close settings"
 				></button>
-				<div class="relative flex h-full w-full max-w-[320px] flex-col gap-4 overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-4">
-					<div class="flex items-center justify-between">
+				<div
+					class="relative flex h-full w-full max-w-[360px] flex-col overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] p-4"
+				>
+					<div class="mb-4 flex items-center justify-between">
 						<h2 class="text-lg font-semibold text-[var(--fg)]">Settings</h2>
 						<button
 							onclick={() => (showSettings = false)}
 							class="rounded p-1 text-[var(--muted)] hover:text-[var(--fg)]"
 							aria-label="Close"
 						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-								><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"
-								/></svg
-							>
+							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M6 18L18 6M6 6l12 12"
+								/>
+							</svg>
 						</button>
 					</div>
 
-					<!-- Theme -->
-					<div>
-						<span class="mb-1 block text-sm font-medium text-[var(--fg)]">Theme</span>
-						<div class="flex gap-2">
-							{#each themes as t}
-								<button
-									onclick={() => settings.update((s) => ({ ...s, theme: t.value as typeof s.theme }))}
-									class="flex-1 rounded border px-2 py-1.5 text-sm {t.value === $settings.theme
-										? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-										: 'border-[var(--border)] text-[var(--fg)]'}"
-								>
-									{t.label}
-								</button>
-							{/each}
-						</div>
-					</div>
+					<SettingsPanel showSubtitleOptions={textMode !== 'epub'} />
 
-					<!-- Font size -->
-					<div>
-						<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="font-size-slider">
-							Font Size ({$settings.fontSize}rem)
-						</label>
-						<input
-							id="font-size-slider"
-							type="range"
-							min="0.8"
-							max="2"
-							step="0.1"
-							value={$settings.fontSize}
-							oninput={(e) =>
-								settings.update((s) => ({
-									...s,
-									fontSize: parseFloat(e.currentTarget.value)
-								}))}
-							class="w-full"
-						/>
-					</div>
-
-					<!-- Line height -->
-					<div>
-						<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="line-height-select">
-							Line Height ({$settings.lineHeight})
-						</label>
-						<select
-							id="line-height-select"
-							value={$settings.lineHeight}
-							onchange={(e) =>
-								settings.update((s) => ({
-									...s,
-									lineHeight: parseFloat(e.currentTarget.value)
-								}))}
-							class="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[var(--fg)]"
-						>
-							{#each lineHeights as lh}
-								<option value={lh}>{lh}</option>
-							{/each}
-						</select>
-					</div>
-
-					<!-- Max width -->
-					<div>
-						<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="max-width-slider">
-							Max Width ({$settings.maxWidth}ch)
-						</label>
-						<input
-							id="max-width-slider"
-							type="range"
-							min="40"
-							max="90"
-							step="5"
-							value={$settings.maxWidth}
-							oninput={(e) =>
-								settings.update((s) => ({
-									...s,
-									maxWidth: parseFloat(e.currentTarget.value)
-								}))}
-							class="w-full"
-						/>
-					</div>
-
-					<!-- Margins -->
-					<div>
-						<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="margins-slider">
-							Side Margins ({$settings.sideMargins}px)
-						</label>
-						<input
-							id="margins-slider"
-							type="range"
-							min="0"
-							max="64"
-							step="4"
-							value={$settings.sideMargins}
-							oninput={(e) =>
-								settings.update((s) => ({
-									...s,
-									sideMargins: parseFloat(e.currentTarget.value)
-								}))}
-							class="w-full"
-						/>
-					</div>
-
-					<!-- Highlight colors -->
-					<div>
-						<span class="mb-1 block text-sm font-medium text-[var(--fg)]">Highlight Color</span>
-						<div class="flex gap-2">
-							<input
-								type="color"
-								value={$settings.hlBg}
-								oninput={(e) =>
-									settings.update((s) => ({
-										...s,
-										hlBg: e.currentTarget.value
-									}))}
-								class="h-10 w-10 cursor-pointer rounded border border-[var(--border)]"
-								aria-label="Highlight background"
-							/>
-							<input
-								type="color"
-								value={$settings.hlFg}
-								oninput={(e) =>
-									settings.update((s) => ({
-										...s,
-										hlFg: e.currentTarget.value
-									}))}
-								class="h-10 w-10 cursor-pointer rounded border border-[var(--border)]"
-								aria-label="Highlight foreground"
-							/>
-						</div>
-					</div>
-
-					<!--
-						Gap threshold and non-speech filtering only affect the
-						subtitle pipeline, which infers structure from audio gaps.
-						In EPUB mode the structure is real, so these do nothing.
-					-->
-					{#if textMode !== 'epub'}
-						<!-- Gap threshold -->
-						<div>
-							<label class="mb-1 block text-sm font-medium text-[var(--fg)]" for="gap-threshold-slider">
-								Gap Threshold ({$settings.gapThreshold}s)
-							</label>
-							<input
-								id="gap-threshold-slider"
-								type="range"
-								min="0.5"
-								max="3"
-								step="0.1"
-								value={$settings.gapThreshold}
-								oninput={(e) =>
-									settings.update((s) => ({
-										...s,
-										gapThreshold: parseFloat(e.currentTarget.value)
-									}))}
-								class="w-full"
-							/>
-						</div>
-
-						<!-- Show non-speech -->
-						<div class="flex items-center justify-between">
-							<label class="text-sm font-medium text-[var(--fg)]" for="show-non-speech">
-								Show non-speech cues
-							</label>
-							<input
-								id="show-non-speech"
-								type="checkbox"
-								checked={$settings.showNonSpeech}
-								onchange={(e) =>
-									settings.update((s) => ({
-										...s,
-										showNonSpeech: e.currentTarget.checked
-									}))}
-								class="h-5 w-5"
-							/>
-						</div>
-					{:else}
-						<div class="text-sm text-[var(--muted)]">
-							Text is from the EPUB, so paragraph and sentence breaks come
-							from the book itself. Gap and non-speech options do not apply.
-						</div>
+					{#if textMode === 'epub'}
+						<p class="mt-4 text-sm text-[var(--muted)]">
+							Text is from the EPUB, so paragraph and sentence breaks come from the book itself. Gap
+							and non-speech options do not apply.
+						</p>
 					{/if}
-
-					<!-- Reset -->
-					<button
-						onclick={() => settings.reset()}
-						class="rounded border border-[var(--border)] px-4 py-2 text-sm text-[var(--fg)] hover:bg-[var(--border)]"
-					>
-						Reset to defaults
-					</button>
 				</div>
 			</div>
 		{/if}

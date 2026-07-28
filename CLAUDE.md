@@ -18,11 +18,13 @@ npm run format       # Auto-format all files
 ```
 
 Run a single test file:
+
 ```bash
 npx vitest run src/lib/sync/normalize.test.ts
 ```
 
 Tests split into two projects by filename suffix:
+
 - `*.dom.test.ts` — runs in jsdom (for EPUB parsing, alignment, renderer)
 - `*.test.ts` / `*.spec.ts` — runs in Node (no DOM)
 
@@ -32,9 +34,11 @@ This is a SvelteKit SPA (adapter-static, `fallback: 'index.html'`) that renders 
 
 ### Routes
 
-- `/` — connection screen (enter ABS URL + API token, stored in `connection` store)
-- `/library` — lists libraries and items from ABS
+- `/` — connection screen (enter ABS URL + API token, stored in `connection` store). On mount it revalidates a stored token and forwards to `/library`, so the form is only shown when there is no working credential. A 401/403 clears the stored token; any other failure (server unreachable) keeps it.
+- `/library` — lists libraries and items from ABS. Grid items open the details page; "Continue Listening" resumes straight into the reader.
+- `/book/[itemId]` — details page: cover, metadata, description, chapter list, progress, and whether the book has the EPUB/subtitle needed for read-along. Playback starts from here (`?restart=1` ignores the saved bookmark).
 - `/read/[itemId]` — the main reader; orchestrates audio, text, sync, and highlighting
+- `/settings` — standalone appearance/reading/sync settings with a live preview
 - `/abs/[...path]` — server-side proxy to ABS (`+server.ts` forwards requests with auth header)
 
 ### Text source pipeline (`src/lib/epub/source.ts`)
@@ -48,7 +52,11 @@ Mode falls back to subtitle when: no EPUB is attached, EPUB parse fails, or alig
 
 ### Sync loop (`src/lib/sync/ticker.ts`)
 
-`createSyncController` runs either `requestAnimationFrame` or `setInterval(100ms)`, switching automatically when RAF frame deltas exceed 150 ms (background tab / iOS throttle). On each tick it binary-searches `TimingIndex.starts`/`ends` (sorted Float64Arrays) for the current audio time and calls `onActivate(sentenceId)`.
+`createSyncController` runs either `requestAnimationFrame` or `setInterval(100ms)`, switching automatically when RAF frame deltas exceed 150 ms (background tab / iOS throttle). On each tick it binary-searches `TimingIndex.starts`/`ends` (sorted Float64Arrays) for the current audio time plus the sync offset, and calls `onActivate(sentenceId)`.
+
+The frame-delta heuristic only fires while frames are still arriving, so it catches a _throttled_ tab but not a _suspended_ one. A locked phone stops RAF outright while audio keeps playing, which used to freeze the highlight on whichever sentence was lit. Two extra drivers cover that: a `timeupdate` listener (still fires ~4Hz when backgrounded) and a `visibilitychange` listener that parks the loop on hide and re-samples on show. `pause`/`ended` also force a final sample, since a pause landing in a cue gap must clear the highlight rather than leave it lit.
+
+The controller attaches listeners to the **singleton** audio element, which outlives the page, so `destroy()` (not just `stop()`) must be called on unmount or stale controllers keep firing.
 
 `TimingIndex` is a shared interface satisfied by both `CueIndex` (subtitle path) and `AlignedIndex` (EPUB path), so the ticker is mode-agnostic.
 
@@ -68,8 +76,15 @@ Uses the CSS Highlight API (`CSS.highlights`) when available, with a class-toggl
 
 - `player` — wraps a singleton `HTMLAudioElement`; exposes `play/pause/seek/skipBack/skipForward/setRate/setVolume/saveBookmark/getBookmark`
 - `reader` — holds `ABSItem`, `cueIndex` (TimingIndex), `sentenceMap` (subtitle mode), and `activeSentenceId`
-- `settings` — persists theme, font size, line height, margins, highlight colors, gap threshold to `localStorage`
+- `settings` — persists appearance, reading and sync preferences to `localStorage`. Loads by merging stored values **over** `defaultSettings`; replacing instead would deserialize newly added keys as `undefined` and push them into CSS custom properties. `applySettingsToDOM` is the single place custom properties are written.
+- `offsets` — per-book sync offset in seconds, keyed by item id. Alignment drift belongs to a recording/transcript pair, so a tuned book keeps its own value; untuned books fall back to `settings.timingOffset`. The in-memory store is the source of truth for both reads and writes (`hydrate()` re-reads storage).
 - `connection` — persists ABS URL and token to `localStorage`
+
+### Reader chrome
+
+The reader is modelled on ttu-ebook-reader: header and player bar are absolutely positioned over a full-height scroller and slide away while audio plays (`settings.autoHideChrome`), leaving a slim progress line with percentage and time remaining. Tapping the text toggles them. Chrome floats rather than sits in flow so hiding it does not reflow the text and lose the reading position.
+
+`SettingsPanel.svelte` is shared between `/settings` and the reader's slide-over sheet; pass `showSubtitleOptions={false}` in EPUB mode, where gap and non-speech options do nothing.
 
 ### Deployment
 

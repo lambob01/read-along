@@ -1,0 +1,382 @@
+<script lang="ts">
+	import {
+		settings,
+		themeOptions,
+		fontOptions,
+		type SettingsState,
+		type HighlightStyle
+	} from '$lib/stores/settings';
+
+	interface Props {
+		/**
+		 * Gap and non-speech options only affect the subtitle pipeline, which
+		 * infers structure from audio gaps. In EPUB mode the structure is real,
+		 * so the reader hides them.
+		 */
+		showSubtitleOptions?: boolean;
+		/** Restricts to one tab and hides the tab bar, for the in-reader sheet. */
+		only?: SectionId | null;
+	}
+
+	let { showSubtitleOptions = true, only = null }: Props = $props();
+
+	type SectionId = 'appearance' | 'reading' | 'sync';
+
+	const sections: { id: SectionId; label: string }[] = [
+		{ id: 'appearance', label: 'Appearance' },
+		{ id: 'reading', label: 'Reading' },
+		{ id: 'sync', label: 'Sync' }
+	];
+
+	let active = $state<SectionId>('appearance');
+	const visible = $derived(only ?? active);
+
+	function patch(fn: (s: SettingsState) => Partial<SettingsState>) {
+		settings.update((s) => ({ ...s, ...fn(s) }));
+	}
+
+	const lineHeights = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.2, 2.5];
+
+	const hlStyles: { value: HighlightStyle; label: string }[] = [
+		{ value: 'background', label: 'Fill' },
+		{ value: 'underline', label: 'Underline' },
+		{ value: 'text', label: 'Text color' },
+		{ value: 'none', label: 'None' }
+	];
+
+	const anchorLabels: Record<string, string> = {
+		'0.25': 'Upper',
+		'0.4': 'Middle',
+		'0.5': 'Center',
+		'0.65': 'Lower'
+	};
+
+	function anchorLabel(v: number): string {
+		return anchorLabels[String(v)] ?? `${Math.round(v * 100)}% down`;
+	}
+
+	function colorHint(style: HighlightStyle): string {
+		if (style === 'background') return 'Background and text';
+		if (style === 'underline') return 'Colour of the underline';
+		return 'Colour the active text takes';
+	}
+</script>
+
+{#snippet row(label: string, hint: string | null)}
+	<div class="min-w-0">
+		<span class="block text-sm font-medium text-[var(--fg)]">{label}</span>
+		{#if hint}
+			<span class="mt-0.5 block text-xs text-[var(--muted)]">{hint}</span>
+		{/if}
+	</div>
+{/snippet}
+
+<div class="flex flex-col gap-5">
+	{#if !only}
+		<div class="flex gap-1 rounded-lg bg-[var(--surface-hover)] p-1">
+			{#each sections as s}
+				<button
+					onclick={() => (active = s.id)}
+					class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {active ===
+					s.id
+						? 'bg-[var(--surface)] text-[var(--fg)] shadow-[var(--shadow-sm)]'
+						: 'text-[var(--muted)] hover:text-[var(--fg)]'}"
+				>
+					{s.label}
+				</button>
+			{/each}
+		</div>
+	{/if}
+
+	{#if visible === 'appearance'}
+		<div>
+			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Theme</span>
+			<div class="grid grid-cols-4 gap-2">
+				{#each themeOptions as t}
+					<button
+						onclick={() => patch(() => ({ theme: t.value }))}
+						class="rounded-lg border px-2 py-2 text-xs font-medium transition-colors {t.value ===
+						$settings.theme
+							? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+							: 'border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]'}"
+					>
+						{t.label}
+					</button>
+				{/each}
+			</div>
+		</div>
+
+		<div>
+			<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="font-family">
+				Font
+			</label>
+			<select
+				id="font-family"
+				value={$settings.fontFamily}
+				onchange={(e) => patch(() => ({ fontFamily: e.currentTarget.value }))}
+				class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+			>
+				{#each fontOptions as f}
+					<option value={f.value}>{f.label}</option>
+				{/each}
+			</select>
+		</div>
+
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="font-size">
+				<span class="text-sm font-medium text-[var(--fg)]">Font size</span>
+				<span class="text-xs text-[var(--muted)] tabular-nums">
+					{$settings.fontSize.toFixed(2)}rem
+				</span>
+			</label>
+			<input
+				id="font-size"
+				type="range"
+				min="0.8"
+				max="2.4"
+				step="0.05"
+				value={$settings.fontSize}
+				oninput={(e) => patch(() => ({ fontSize: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+		</div>
+
+		<div>
+			<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="line-height">
+				Line height
+			</label>
+			<select
+				id="line-height"
+				value={$settings.lineHeight}
+				onchange={(e) => patch(() => ({ lineHeight: parseFloat(e.currentTarget.value) }))}
+				class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--fg)]"
+			>
+				{#each lineHeights as lh}
+					<option value={lh}>{lh}</option>
+				{/each}
+			</select>
+		</div>
+
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="max-width">
+				<span class="text-sm font-medium text-[var(--fg)]">Reading width</span>
+				<span class="text-xs text-[var(--muted)] tabular-nums">{$settings.maxWidth} chars</span>
+			</label>
+			<input
+				id="max-width"
+				type="range"
+				min="30"
+				max="120"
+				step="1"
+				value={$settings.maxWidth}
+				oninput={(e) => patch(() => ({ maxWidth: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+		</div>
+
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="side-margins">
+				<span class="text-sm font-medium text-[var(--fg)]">Side margins</span>
+				<span class="text-xs text-[var(--muted)] tabular-nums">{$settings.sideMargins}px</span>
+			</label>
+			<input
+				id="side-margins"
+				type="range"
+				min="0"
+				max="80"
+				step="2"
+				value={$settings.sideMargins}
+				oninput={(e) => patch(() => ({ sideMargins: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+		</div>
+
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="para-spacing">
+				<span class="text-sm font-medium text-[var(--fg)]">Paragraph spacing</span>
+				<span class="text-xs text-[var(--muted)] tabular-nums">
+					{$settings.paragraphSpacing.toFixed(1)}em
+				</span>
+			</label>
+			<input
+				id="para-spacing"
+				type="range"
+				min="0"
+				max="2.5"
+				step="0.1"
+				value={$settings.paragraphSpacing}
+				oninput={(e) => patch(() => ({ paragraphSpacing: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+		</div>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Justify text', 'Aligns both edges of each line')}
+			<input
+				type="checkbox"
+				checked={$settings.justify}
+				onchange={(e) => patch(() => ({ justify: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+	{/if}
+
+	{#if visible === 'reading'}
+		<div>
+			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Highlight style</span>
+			<div class="grid grid-cols-4 gap-2">
+				{#each hlStyles as h}
+					<button
+						onclick={() => patch(() => ({ hlStyle: h.value }))}
+						class="rounded-lg border px-2 py-2 text-xs font-medium transition-colors {h.value ===
+						$settings.hlStyle
+							? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+							: 'border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]'}"
+					>
+						{h.label}
+					</button>
+				{/each}
+			</div>
+		</div>
+
+		<!--
+			Only the fill style paints behind the text, so it is the only one that
+			uses the second swatch. Showing both regardless would imply the text
+			colour does something in the other styles.
+		-->
+		{#if $settings.hlStyle !== 'none'}
+			<div class="flex items-center justify-between gap-4">
+				{@render row(
+					$settings.hlStyle === 'background' ? 'Highlight colors' : 'Highlight color',
+					colorHint($settings.hlStyle)
+				)}
+				<div class="flex shrink-0 gap-2">
+					<input
+						type="color"
+						value={$settings.hlBg}
+						oninput={(e) => patch(() => ({ hlBg: e.currentTarget.value }))}
+						class="h-9 w-9 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+						aria-label={$settings.hlStyle === 'background'
+							? 'Highlight background color'
+							: 'Highlight color'}
+					/>
+					{#if $settings.hlStyle === 'background'}
+						<input
+							type="color"
+							value={$settings.hlFg}
+							oninput={(e) => patch(() => ({ hlFg: e.currentTarget.value }))}
+							class="h-9 w-9 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+							aria-label="Highlight text color"
+						/>
+					{/if}
+				</div>
+			</div>
+		{/if}
+
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="scroll-anchor">
+				<span class="text-sm font-medium text-[var(--fg)]">Highlight position</span>
+				<span class="text-xs text-[var(--muted)]">{anchorLabel($settings.scrollAnchor)}</span>
+			</label>
+			<input
+				id="scroll-anchor"
+				type="range"
+				min="0.15"
+				max="0.75"
+				step="0.05"
+				value={$settings.scrollAnchor}
+				oninput={(e) => patch(() => ({ scrollAnchor: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+			<p class="mt-1 text-xs text-[var(--muted)]">
+				Where the current line sits as the page auto-scrolls.
+			</p>
+		</div>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Smooth scrolling', 'Animate instead of jumping')}
+			<input
+				type="checkbox"
+				checked={$settings.smoothScroll}
+				onchange={(e) => patch(() => ({ smoothScroll: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Auto-hide controls', 'Tap the page to show them again')}
+			<input
+				type="checkbox"
+				checked={$settings.autoHideChrome}
+				onchange={(e) => patch(() => ({ autoHideChrome: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+	{/if}
+
+	{#if visible === 'sync'}
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="timing-offset">
+				<span class="text-sm font-medium text-[var(--fg)]">Default timing offset</span>
+				<span class="text-xs text-[var(--muted)] tabular-nums">
+					{$settings.timingOffset > 0 ? '+' : ''}{$settings.timingOffset.toFixed(2)}s
+				</span>
+			</label>
+			<input
+				id="timing-offset"
+				type="range"
+				min="-5"
+				max="5"
+				step="0.05"
+				value={$settings.timingOffset}
+				oninput={(e) => patch(() => ({ timingOffset: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+			<p class="mt-1 text-xs text-[var(--muted)]">
+				Applies to books you have not tuned individually. Positive values move the highlight ahead
+				of the audio. Each book can override this from the reader.
+			</p>
+		</div>
+
+		{#if showSubtitleOptions}
+			<div>
+				<label class="mb-2 flex items-baseline justify-between" for="gap-threshold">
+					<span class="text-sm font-medium text-[var(--fg)]">Paragraph gap</span>
+					<span class="text-xs text-[var(--muted)] tabular-nums">
+						{$settings.gapThreshold.toFixed(1)}s
+					</span>
+				</label>
+				<input
+					id="gap-threshold"
+					type="range"
+					min="0.5"
+					max="3"
+					step="0.1"
+					value={$settings.gapThreshold}
+					oninput={(e) => patch(() => ({ gapThreshold: parseFloat(e.currentTarget.value) }))}
+					class="w-full accent-[var(--accent)]"
+				/>
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					Silence longer than this starts a new paragraph. Only used when a book has no EPUB.
+				</p>
+			</div>
+
+			<label class="flex items-center justify-between gap-4">
+				{@render row('Show non-speech cues', 'Such as [music] and [applause]')}
+				<input
+					type="checkbox"
+					checked={$settings.showNonSpeech}
+					onchange={(e) => patch(() => ({ showNonSpeech: e.currentTarget.checked }))}
+					class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+				/>
+			</label>
+		{/if}
+	{/if}
+
+	<button
+		onclick={() => settings.reset()}
+		class="mt-2 rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--fg)] transition-colors hover:bg-[var(--surface-hover)]"
+	>
+		Reset all to defaults
+	</button>
+</div>

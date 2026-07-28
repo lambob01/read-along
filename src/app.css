@@ -24,6 +24,8 @@
 	--theme-font-family: Georgia, serif;
 	--theme-max-width: 65ch;
 	--theme-side-margins: 16px;
+	--theme-paragraph-spacing: 0.9em;
+	--theme-text-align: start;
 }
 
 [data-theme='dark'] {
@@ -65,6 +67,42 @@
 	--accent-fg: #000000;
 }
 
+[data-theme='garden'] {
+	--bg: #e9eddf;
+	--fg: #35402a;
+	--muted: #6b7860;
+	--surface: #dfe5d2;
+	--surface-hover: #d4dcc3;
+	--border: #c2cdb0;
+	--accent: #4f7a3f;
+	--accent-hover: #3f6432;
+	--accent-fg: #f2f5ea;
+}
+
+[data-theme='gray'] {
+	--bg: #3b3b3b;
+	--fg: #dcdcdc;
+	--muted: #9a9a9a;
+	--surface: #464646;
+	--surface-hover: #515151;
+	--border: #565656;
+	--accent: #9fb8d4;
+	--accent-hover: #b9cde3;
+	--accent-fg: #2a2a2a;
+}
+
+[data-theme='dracula'] {
+	--bg: #282a36;
+	--fg: #f8f8f2;
+	--muted: #9ca0b0;
+	--surface: #343746;
+	--surface-hover: #414458;
+	--border: #44475a;
+	--accent: #bd93f9;
+	--accent-hover: #d0aeff;
+	--accent-fg: #282a36;
+}
+
 body {
 	margin: 0;
 	background-color: var(--bg);
@@ -73,6 +111,11 @@ body {
 	-webkit-font-smoothing: antialiased;
 }
 
+/*
+	Highlight treatments. The Highlight API restricts which properties it honours
+	(no border-radius, no box-shadow), so the underline variant uses
+	text-decoration, which it does support.
+*/
 ::highlight(active-sentence) {
 	background-color: var(--hl-bg);
 	color: var(--hl-fg);
@@ -84,9 +127,51 @@ body {
 	border-radius: 2px;
 }
 
+/*
+	`color` must be stated outright, never `inherit`. Highlight pseudo-elements
+	inherit from other highlight pseudo-elements, not from the text they cover,
+	so at the root `inherit` resolves to the initial `canvastext` — black, which
+	is unreadable on every dark theme.
+*/
+[data-hl-style='underline'] ::highlight(active-sentence) {
+	background-color: transparent;
+	color: var(--fg);
+	text-decoration: underline 0.12em var(--hl-bg);
+	text-underline-offset: 0.18em;
+}
+
+[data-hl-style='underline'] .hl-active {
+	background-color: transparent;
+	color: inherit;
+	text-decoration: underline 0.12em var(--hl-bg);
+	text-underline-offset: 0.18em;
+}
+
+[data-hl-style='text'] ::highlight(active-sentence) {
+	background-color: transparent;
+	color: var(--hl-bg);
+}
+
+[data-hl-style='text'] .hl-active {
+	background-color: transparent;
+	color: var(--hl-bg);
+	font-weight: 600;
+}
+
+[data-hl-style='none'] ::highlight(active-sentence) {
+	background-color: transparent;
+	color: var(--fg);
+}
+
+[data-hl-style='none'] .hl-active {
+	background-color: transparent;
+	color: inherit;
+}
+
 .reader-paragraph {
-	margin: 0 0 0.5em 0;
+	margin: 0 0 var(--theme-paragraph-spacing) 0;
 	text-indent: 0;
+	text-align: var(--theme-text-align);
 }
 
 .reader-sentence {
@@ -103,7 +188,8 @@ body {
 /* Blocks come from the book, so spacing follows the book's own structure
    rather than the uniform paragraph spacing the subtitle path produced. */
 .reader-block {
-	margin: 0 0 0.9em 0;
+	margin: 0 0 var(--theme-paragraph-spacing) 0;
+	text-align: var(--theme-text-align);
 }
 
 .reader-block h1,
@@ -121,6 +207,8 @@ h4.reader-block {
 	margin: 1.6em 0 0.8em;
 	font-weight: 600;
 	line-height: 1.3;
+	/* Justification applies to prose only; stretched headings read as broken. */
+	text-align: start;
 }
 
 blockquote.reader-block {

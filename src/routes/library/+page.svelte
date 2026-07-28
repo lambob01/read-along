@@ -29,10 +29,7 @@
 		}
 
 		try {
-			const client = new ABSClient(
-				'/abs',
-				connectionToken
-			);
+			const client = new ABSClient('/abs', connectionToken);
 			const libs = await getLibraries(client);
 			libraries = libs;
 
@@ -60,7 +57,13 @@
 		}
 	}
 
+	/** Books open to their details page; playback starts from there. */
 	function openItem(itemId: string) {
+		goto(`/book/${itemId}`);
+	}
+
+	/** "Continue Listening" keeps the one-tap resume the shelf implies. */
+	function resumeItem(itemId: string) {
 		goto(`/read/${itemId}`);
 	}
 
@@ -96,45 +99,79 @@
 </script>
 
 <div class="min-h-screen bg-[var(--bg)]">
-	<header class="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/80 px-4 py-4 backdrop-blur sm:px-6">
+	<header
+		class="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/80 px-4 py-4 backdrop-blur sm:px-6"
+	>
 		<div class="mx-auto flex max-w-6xl items-center justify-between">
 			<h1 class="text-lg font-semibold tracking-tight text-[var(--fg)]">Library</h1>
-			<button
-				onclick={() => {
-					connection.disconnect();
-					goto('/');
-				}}
-				class="rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)]"
-			>
-				Disconnect
-			</button>
+			<div class="flex items-center gap-1">
+				<button
+					onclick={() => goto('/settings')}
+					class="rounded-lg p-2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)]"
+					aria-label="Settings"
+				>
+					<svg
+						class="h-5 w-5"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+						stroke-width="2"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+						/>
+						<circle cx="12" cy="12" r="3" />
+					</svg>
+				</button>
+				<button
+					onclick={() => {
+						connection.disconnect();
+						goto('/');
+					}}
+					class="rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)]"
+				>
+					Disconnect
+				</button>
+			</div>
 		</div>
 
 		<div class="mx-auto mt-3 max-w-6xl">
 			<div class="relative">
 				<svg
-					class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
+					class="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
 					fill="none"
 					stroke="currentColor"
 					viewBox="0 0 24 24"
 					stroke-width="2"
 				>
-					<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"
+					/>
 				</svg>
 				<input
 					type="text"
 					bind:value={searchQuery}
 					placeholder="Search by title or author…"
 					aria-label="Search books"
-					class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] py-2 pl-9 pr-9 text-sm text-[var(--fg)] placeholder-[var(--muted)] transition-colors focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-soft)]"
+					class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] py-2 pr-9 pl-9 text-sm text-[var(--fg)] placeholder-[var(--muted)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] focus:outline-none"
 				/>
 				{#if searchQuery}
 					<button
 						onclick={() => (searchQuery = '')}
 						aria-label="Clear search"
-						class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--fg)]"
+						class="absolute top-1/2 right-2.5 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--fg)]"
 					>
-						<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+						<svg
+							class="h-4 w-4"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+						>
 							<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 						</svg>
 					</button>
@@ -147,7 +184,8 @@
 				{#each libraries as lib}
 					<button
 						onclick={() => selectLibrary(lib.id)}
-						class="rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors {selectedLibraryId === lib.id
+						class="rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors {selectedLibraryId ===
+						lib.id
 							? 'bg-[var(--accent)] text-[var(--accent-fg)]'
 							: 'bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--fg)]'}"
 					>
@@ -166,26 +204,34 @@
 		{:else}
 			{#if $recent.length > 0 && !searchQuery.trim()}
 				<section class="mb-8">
-					<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+					<h2 class="mb-3 text-sm font-semibold tracking-wide text-[var(--muted)] uppercase">
 						Continue Listening
 					</h2>
 					<div class="-mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
 						{#each $recent as book (book.itemId)}
 							<button
-								onclick={() => openItem(book.itemId)}
+								onclick={() => resumeItem(book.itemId)}
 								class="group w-40 shrink-0 text-left sm:w-44"
 							>
-								<div class="relative aspect-square overflow-hidden rounded-xl bg-[var(--surface)] shadow-[var(--shadow-sm)] transition-shadow group-hover:shadow-[var(--shadow-md)]">
+								<div
+									class="relative aspect-square overflow-hidden rounded-xl bg-[var(--surface)] shadow-[var(--shadow-sm)] transition-shadow group-hover:shadow-[var(--shadow-md)]"
+								>
 									<img
 										src={getCoverUrl(book.itemId)}
 										alt=""
 										class="h-full w-full object-cover"
 										loading="lazy"
 									/>
-									<div class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30">
-										<span class="flex h-10 w-10 scale-90 items-center justify-center rounded-full bg-white/90 opacity-0 shadow-lg transition-all group-hover:scale-100 group-hover:opacity-100">
-											<svg class="h-4 w-4 translate-x-0.5 text-black" fill="currentColor" viewBox="0 0 24 24"
-												><path d="M8 5v14l11-7z" /></svg
+									<div
+										class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
+									>
+										<span
+											class="flex h-10 w-10 scale-90 items-center justify-center rounded-full bg-white/90 opacity-0 shadow-lg transition-all group-hover:scale-100 group-hover:opacity-100"
+										>
+											<svg
+												class="h-4 w-4 translate-x-0.5 text-black"
+												fill="currentColor"
+												viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg
 											>
 										</span>
 									</div>
@@ -210,31 +256,39 @@
 				<p class="text-sm text-[var(--muted)]">No books match "{searchQuery.trim()}"</p>
 			{:else}
 				{#if $recent.length > 0 && !searchQuery.trim()}
-					<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+					<h2 class="mb-3 text-sm font-semibold tracking-wide text-[var(--muted)] uppercase">
 						All Books
 					</h2>
 				{:else if searchQuery.trim()}
-					<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
-						{filteredItems.length} {filteredItems.length === 1 ? 'result' : 'results'}
+					<h2 class="mb-3 text-sm font-semibold tracking-wide text-[var(--muted)] uppercase">
+						{filteredItems.length}
+						{filteredItems.length === 1 ? 'result' : 'results'}
 					</h2>
 				{/if}
-				<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+				<div
+					class="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+				>
 					{#each filteredItems as item}
-						<button
-							onclick={() => openItem(item.id)}
-							class="group text-left"
-						>
-							<div class="relative aspect-square overflow-hidden rounded-xl bg-[var(--surface)] shadow-[var(--shadow-sm)] transition-shadow group-hover:shadow-[var(--shadow-md)]">
+						<button onclick={() => openItem(item.id)} class="group text-left">
+							<div
+								class="relative aspect-square overflow-hidden rounded-xl bg-[var(--surface)] shadow-[var(--shadow-sm)] transition-shadow group-hover:shadow-[var(--shadow-md)]"
+							>
 								<img
 									src={getCoverUrl(item.id)}
 									alt=""
 									class="h-full w-full object-cover"
 									loading="lazy"
 								/>
-								<div class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30">
-									<span class="flex h-10 w-10 scale-90 items-center justify-center rounded-full bg-white/90 opacity-0 shadow-lg transition-all group-hover:scale-100 group-hover:opacity-100">
-										<svg class="h-4 w-4 translate-x-0.5 text-black" fill="currentColor" viewBox="0 0 24 24"
-											><path d="M8 5v14l11-7z" /></svg
+								<div
+									class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
+								>
+									<span
+										class="flex h-10 w-10 scale-90 items-center justify-center rounded-full bg-white/90 opacity-0 shadow-lg transition-all group-hover:scale-100 group-hover:opacity-100"
+									>
+										<svg
+											class="h-4 w-4 translate-x-0.5 text-black"
+											fill="currentColor"
+											viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg
 										>
 									</span>
 								</div>
