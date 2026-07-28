@@ -228,10 +228,8 @@
 										<span
 											class="flex h-10 w-10 scale-90 items-center justify-center rounded-full bg-white/90 opacity-0 shadow-lg transition-all group-hover:scale-100 group-hover:opacity-100"
 										>
-											<svg
-												class="h-4 w-4 translate-x-0.5 text-black"
-												fill="currentColor"
-												viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg
+											<svg class="h-4 w-4 text-black" fill="currentColor" viewBox="0 0 24 24"
+												><path d="M8 5v14l11-7z" /></svg
 											>
 										</span>
 									</div>
@@ -285,10 +283,8 @@
 									<span
 										class="flex h-10 w-10 scale-90 items-center justify-center rounded-full bg-white/90 opacity-0 shadow-lg transition-all group-hover:scale-100 group-hover:opacity-100"
 									>
-										<svg
-											class="h-4 w-4 translate-x-0.5 text-black"
-											fill="currentColor"
-											viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg
+										<svg class="h-4 w-4 text-black" fill="currentColor" viewBox="0 0 24 24"
+											><path d="M8 5v14l11-7z" /></svg
 										>
 									</span>
 								</div>

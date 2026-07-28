@@ -12,6 +12,22 @@ export interface PlayerState {
 let audio: HTMLAudioElement | null = null;
 let currentSrc = '';
 
+/**
+ * Bounds a seek target against the media's duration.
+ *
+ * Only clamps against a duration the element actually knows. Until metadata
+ * loads `duration` is NaN, and the original `Math.min(time, duration || 0)`
+ * turned that into a clamp to zero — so a seek issued during the load, a
+ * resumed bookmark above all, silently rewound the book to the start. An
+ * out-of-range value is safe to pass through: the element records it as the
+ * default playback start position and applies it once it knows better.
+ */
+export function clampSeek(time: number, duration: number): number {
+	if (!Number.isFinite(time) || time < 0) return 0;
+	const known = Number.isFinite(duration) && duration > 0;
+	return known ? Math.min(time, duration) : time;
+}
+
 function getAudio(): HTMLAudioElement | null {
 	if (typeof Audio === 'undefined') return null;
 	if (!audio) {
@@ -60,7 +76,35 @@ function createPlayerStore() {
 		},
 		seek(time: number) {
 			withAudio((a) => {
-				a.currentTime = Math.max(0, Math.min(time, a.duration || 0));
+				a.currentTime = clampSeek(time, a.duration);
+			}, undefined);
+		},
+		/**
+		 * Seeks once the media knows its own duration, or immediately if it
+		 * already does.
+		 *
+		 * Resuming races the metadata load, and a big remote file can take many
+		 * seconds to answer. The element is a singleton shared between books, so
+		 * a pending seek is dropped if the source changes under it — otherwise
+		 * opening a second book could inherit the first one's position.
+		 */
+		seekWhenReady(time: number) {
+			withAudio((a) => {
+				if (a.readyState >= HTMLMediaElement.HAVE_METADATA) {
+					player.seek(time);
+					return;
+				}
+				const srcAtRequest = currentSrc;
+				const cleanup = () => {
+					a.removeEventListener('loadedmetadata', onReady);
+					a.removeEventListener('error', cleanup);
+				};
+				function onReady() {
+					cleanup();
+					if (currentSrc === srcAtRequest) player.seek(time);
+				}
+				a.addEventListener('loadedmetadata', onReady);
+				a.addEventListener('error', cleanup);
 			}, undefined);
 		},
 		setRate(rate: number) {

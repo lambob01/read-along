@@ -279,9 +279,11 @@
 				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
 				player.setSrc(src);
 				const bookmark = restart ? 0 : (player.getBookmark(itemId) ?? 0);
-				if (bookmark > 0) {
-					setTimeout(() => player.seek(bookmark), 500);
-				}
+				// Waits for metadata rather than guessing at a delay: 500ms was
+				// enough on a local file and nowhere near enough for a long book
+				// over a remote connection, where the seek landed before the
+				// element knew its duration and was discarded.
+				if (bookmark > 0) player.seekWhenReady(bookmark);
 			}
 
 			saveBookmarkInterval = setInterval(() => {
