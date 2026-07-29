@@ -358,7 +358,9 @@
 
 		<div>
 			<label class="mb-2 flex items-baseline justify-between" for="max-width">
-				<span class="text-sm font-medium text-[var(--fg)]">Reading width</span>
+				<span class="text-sm font-medium text-[var(--fg)]">
+					{$settings.verticalText ? 'Column length' : 'Reading width'}
+				</span>
 				<span class="text-xs text-[var(--muted)] tabular-nums">{$settings.maxWidth} chars</span>
 			</label>
 			<input
@@ -371,7 +373,41 @@
 				oninput={(e) => patch(() => ({ maxWidth: parseFloat(e.currentTarget.value) }))}
 				class="w-full accent-[var(--accent)]"
 			/>
+			{#if $settings.verticalText}
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					How long each column runs, top to bottom. Capped by the height of the screen, so on a
+					short window this may have no effect.
+				</p>
+			{/if}
 		</div>
+
+		<!--
+			Only meaningful vertically. Horizontally the line-length cap above
+			already leaves margins; vertical text scrolls sideways for ever, so the
+			gutters have to come from narrowing the reading pane itself.
+		-->
+		{#if $settings.verticalText}
+			<div>
+				<label class="mb-2 flex items-baseline justify-between" for="vertical-width">
+					<span class="text-sm font-medium text-[var(--fg)]">Reading width</span>
+					<span class="text-xs text-[var(--muted)] tabular-nums">{$settings.verticalWidth}%</span>
+				</label>
+				<input
+					id="vertical-width"
+					type="range"
+					min="30"
+					max="100"
+					step="1"
+					value={$settings.verticalWidth}
+					oninput={(e) => patch(() => ({ verticalWidth: parseFloat(e.currentTarget.value) }))}
+					class="w-full accent-[var(--accent)]"
+				/>
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					How much of the screen the text spans, leaving gutters either side. 100% runs edge to
+					edge.
+				</p>
+			</div>
+		{/if}
 
 		<div>
 			<label class="mb-2 flex items-baseline justify-between" for="side-margins">
@@ -418,6 +454,20 @@
 				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
 			/>
 		</label>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Vertical text', 'Tategaki: columns top to bottom, right to left')}
+			<input
+				type="checkbox"
+				checked={$settings.verticalText}
+				onchange={(e) => patch(() => ({ verticalText: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+		<p class="-mt-3 text-xs text-[var(--muted)]">
+			The reader scrolls sideways, starting at the right edge. Reading width becomes the height of
+			each column.
+		</p>
 	{/if}
 
 	{#if visible === 'reading'}

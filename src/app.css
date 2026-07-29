@@ -196,8 +196,90 @@ body {
 	color: inherit;
 }
 
+/* --- Reading surface --------------------------------------------------- */
+
+/*
+	The reader is written in logical properties throughout, so vertical mode is
+	a single `writing-mode` switch rather than a parallel set of rules:
+	`inline-size` is the line length in both, and `block-size` is the direction
+	the text advances. Physical properties are used only where something really
+	is physical — the chrome sits at the top and bottom of the screen whichever
+	way the text runs.
+*/
+.reader-scroller {
+	/* Both axes, deliberately: the writing mode decides which one actually
+	   overflows, and pinning the other to `hidden` would clip the text rather
+	   than let it be reached. */
+	overflow: auto;
+	/* Top and bottom clear the floating header and player bar, which stay put
+	   whichever way the text runs. */
+	padding: 4rem var(--theme-side-margins) 7rem;
+}
+
+/*
+	Vertical Japanese typesetting. `vertical-rl` is right-to-left by definition:
+	columns run top to bottom and each new column starts to the left of the
+	last, so the reader scrolls horizontally and backwards. Browsers park the
+	initial scroll position at the block start — the right edge — on their own.
+
+	Kept separate from `.reader-scroller` so the settings preview can turn the
+	same switch without being a scroll container.
+*/
+[data-vertical='true'] {
+	writing-mode: vertical-rl;
+}
+
+/*
+	Gutters either side of vertical text.
+
+	Horizontally the line-length cap does this for free: text is one column wide
+	and auto margins centre it. Vertical text scrolls sideways without end, so
+	there is no width to cap — the pane itself is narrowed instead, and the
+	space left over becomes the gutters.
+
+	Physical `width` and `margin-left/right`, not their logical spellings: these
+	elements are themselves `vertical-rl`, so `margin-inline` on them would mean
+	top and bottom.
+*/
+.reader-pane[data-vertical='true'] {
+	width: var(--theme-vertical-width);
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.reader-content {
+	/* The line-length limit. Horizontally this caps the width; vertically it
+	   caps the column height, which is the same constraint on the same axis. */
+	max-inline-size: var(--theme-max-width);
+	margin-inline: auto;
+}
+
+/* Notices are chrome, not prose: they stay horizontal so they can be read at a
+   glance rather than rotating with the book. */
+.reader-notice {
+	writing-mode: horizontal-tb;
+	max-inline-size: var(--theme-max-width);
+	margin-inline: auto;
+	margin-block-end: 1rem;
+}
+
+/*
+	In vertical mode the notice keeps its own horizontal writing mode, which
+	means its logical properties resolve against *that* mode, not the reader's.
+	Sized physically instead, so there is nothing to reason about: a fixed
+	column, its own content height, and the gap on the left — the side the text
+	continues from.
+*/
+[data-vertical='true'] .reader-notice {
+	max-inline-size: none;
+	width: min(40ch, 60vw);
+	height: fit-content;
+	margin: 0 0 0 1rem;
+}
+
 .reader-paragraph {
-	margin: 0 0 var(--theme-paragraph-spacing) 0;
+	margin: 0;
+	margin-block-end: var(--theme-paragraph-spacing);
 	text-indent: 0;
 	text-align: var(--theme-text-align);
 }
@@ -216,14 +298,16 @@ body {
 /* Blocks come from the book, so spacing follows the book's own structure
    rather than the uniform paragraph spacing the subtitle path produced. */
 .reader-block {
-	margin: 0 0 var(--theme-paragraph-spacing) 0;
+	margin: 0;
+	margin-block-end: var(--theme-paragraph-spacing);
 	text-align: var(--theme-text-align);
 }
 
 .reader-block h1,
 .reader-block h2,
 .reader-block h3 {
-	margin: 1.6em 0 0.8em;
+	margin: 0;
+	margin-block: 1.6em 0.8em;
 	font-weight: 600;
 	line-height: 1.3;
 }
@@ -232,7 +316,8 @@ h1.reader-block,
 h2.reader-block,
 h3.reader-block,
 h4.reader-block {
-	margin: 1.6em 0 0.8em;
+	margin: 0;
+	margin-block: 1.6em 0.8em;
 	font-weight: 600;
 	line-height: 1.3;
 	/* Justification applies to prose only; stretched headings read as broken. */

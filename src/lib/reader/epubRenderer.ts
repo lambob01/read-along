@@ -89,6 +89,12 @@ export interface EpubRenderHandle {
 	elementFor(sentenceId: number): HTMLElement | undefined;
 	/** Mounts every chapter. Used when the book is small enough not to window. */
 	mountAll(): void;
+	/**
+	 * Drops the cached placeholder sizes. Call after the writing mode changes:
+	 * the reserved extents were measured along the old block axis and mean
+	 * nothing once that axis has rotated.
+	 */
+	invalidateLayout(): void;
 	destroy(): void;
 }
 
@@ -125,7 +131,18 @@ export function renderEpub(
 
 	const hosts = new Map<number, HTMLElement>();
 	const mounted = new Map<number, RenderedChapter>();
-	const heights = new Map<number, number>();
+	/** Extent an unmounted chapter reserves along the block (scrolling) axis. */
+	const blockSizes = new Map<number, number>();
+
+	/**
+	 * True under `writing-mode: vertical-rl`, where the block axis is
+	 * horizontal. Read from the live container rather than passed in, so the
+	 * renderer stays ignorant of the setting that drives it.
+	 */
+	function isVertical(): boolean {
+		if (typeof getComputedStyle !== 'function') return false;
+		return getComputedStyle(container).writingMode.startsWith('vertical');
+	}
 
 	// One host per chapter, in spine order, so scroll geometry is stable.
 	const orders = [...chapterByOrder.keys()].sort((a, b) => a - b);
@@ -179,6 +196,7 @@ export function renderEpub(
 
 		host.replaceChildren(frag);
 		host.style.minHeight = '';
+		host.style.minWidth = '';
 
 		const record: RenderedChapter = { order, el: host, spans };
 		mounted.set(order, record);
@@ -188,11 +206,21 @@ export function renderEpub(
 	function unmount(order: number): void {
 		const record = mounted.get(order);
 		if (!record) return;
-		// Preserve the occupied height so unmounting does not shift scroll.
-		const height = record.el.getBoundingClientRect().height;
-		if (height > 0) heights.set(order, height);
+		// Preserve the extent occupied along the scrolling axis so unmounting
+		// does not shift scroll position. That axis is vertical normally and
+		// horizontal under vertical-rl, so the reservation moves between
+		// min-height and min-width. Written as physical properties rather than
+		// `min-block-size` because the logical form is not universally
+		// reflected in CSSOM, and a silently ignored reservation would show up
+		// as the reader jumping while it scrolls.
+		const rect = record.el.getBoundingClientRect();
+		const vertical = isVertical();
+		const size = vertical ? rect.width : rect.height;
+		if (size > 0) blockSizes.set(order, size);
 		record.el.replaceChildren();
-		record.el.style.minHeight = `${heights.get(order) ?? 0}px`;
+		const reserved = `${blockSizes.get(order) ?? 0}px`;
+		record.el.style.minHeight = vertical ? '' : reserved;
+		record.el.style.minWidth = vertical ? reserved : '';
 		mounted.delete(order);
 	}
 
@@ -224,6 +252,16 @@ export function renderEpub(
 		},
 		mountAll() {
 			for (const order of orders) mount(order);
+		},
+		invalidateLayout() {
+			blockSizes.clear();
+			// Collapse the placeholders too: a stale extent on the new axis is
+			// worse than none, and they are re-measured on the next unmount.
+			for (const [order, host] of hosts) {
+				if (mounted.has(order)) continue;
+				host.style.minHeight = '';
+				host.style.minWidth = '';
+			}
 		},
 		destroy() {
 			for (const order of [...mounted.keys()]) unmount(order);

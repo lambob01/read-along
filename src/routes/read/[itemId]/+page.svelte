@@ -194,7 +194,37 @@
 	$effect(() => {
 		autoScroller?.setOptions({
 			anchor: $settings.scrollAnchor,
-			smooth: $settings.smoothScroll
+			smooth: $settings.smoothScroll,
+			vertical: $settings.verticalText
+		});
+	});
+
+	/**
+	 * Rotating the text rotates the scrolling axis, which invalidates every
+	 * placeholder the chapter windowing had measured and leaves the reader
+	 * parked at an offset that no longer means anything. Re-anchor on the line
+	 * being read.
+	 *
+	 * Guarded on the value actually changing: the effect is re-evaluated
+	 * whenever settings change, and re-anchoring on every one of those would
+	 * fight the autoscroller.
+	 */
+	let lastVertical: boolean | null = null;
+	$effect(() => {
+		const vertical = $settings.verticalText;
+		if (lastVertical === vertical) return;
+		const isFirstRun = lastVertical === null;
+		lastVertical = vertical;
+		if (isFirstRun) return;
+
+		epubRender?.invalidateLayout();
+		const id = lastActiveId;
+		if (id === null) return;
+		// After the browser has reflowed to the new axis, not during.
+		requestAnimationFrame(() => {
+			epubRender?.ensureVisible(id);
+			autoScroller?.resume();
+			autoScroller?.scrollTo(id);
 		});
 	});
 
@@ -412,7 +442,8 @@
 		if (scrollerEl) {
 			autoScroller = createAutoScroller(scrollerEl, elementFor, {
 				anchor: $settings.scrollAnchor,
-				smooth: $settings.smoothScroll
+				smooth: $settings.smoothScroll,
+				vertical: $settings.verticalText
 			});
 		}
 	}
@@ -959,7 +990,8 @@
 			bind:this={scrollerEl}
 			onclick={handleReaderTap}
 			role="presentation"
-			class="flex-1 overflow-y-auto px-[var(--theme-side-margins)] pt-16 pb-28"
+			data-vertical={$settings.verticalText}
+			class="reader-scroller reader-pane flex-1"
 		>
 			{#if sourceNotice && $reader.cueIndex}
 				<!--
@@ -967,15 +999,13 @@
 					main failure mode of the EPUB path.
 				-->
 				<div
-					class="mx-auto mb-4 rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
-					style="max-width: var(--theme-max-width);"
+					class="reader-notice rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
 				>
 					{sourceNotice}
 				</div>
 			{:else if textMode === 'epub' && coverage !== null && coverage < 0.95}
 				<div
-					class="mx-auto mb-4 rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
-					style="max-width: var(--theme-max-width);"
+					class="reader-notice rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
 				>
 					{Math.round(coverage * 100)}% of the book is synced to the audio. Unsynced passages are
 					shown but will not highlight.
@@ -983,13 +1013,7 @@
 			{/if}
 
 			{#if !$reader.cueIndex}
-				<div
-					class="mx-auto flex items-center justify-center py-12"
-					style="max-width: var(--theme-max-width);
-					font-family: var(--theme-font-family);
-					font-size: var(--theme-font-size);
-					line-height: var(--theme-line-height);"
-				>
+				<div class="reader-notice flex items-center justify-center py-12">
 					<div class="text-center">
 						<p class="text-lg text-[var(--muted)]">No transcript available for this item</p>
 						<p class="mt-2 text-sm text-[var(--muted)]">Press play to listen to the audiobook.</p>
@@ -998,9 +1022,8 @@
 			{:else}
 				<div
 					bind:this={contentEl}
-					class="mx-auto"
-					style="max-width: var(--theme-max-width);
-					font-family: var(--theme-font-family);
+					class="reader-content"
+					style="font-family: var(--theme-font-family);
 					font-size: var(--theme-font-size);
 					line-height: var(--theme-line-height);"
 				></div>

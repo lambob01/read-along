@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
+	import { settings } from '$lib/stores/settings';
 </script>
 
 <div class="min-h-screen bg-[var(--bg)]">
@@ -23,21 +24,22 @@
 
 	<main class="mx-auto max-w-2xl px-4 py-6 sm:px-6">
 		<!-- A live specimen: every appearance control below retargets this block,
-		     so the effect is visible without opening a book. -->
+		     so the effect is visible without opening a book. In vertical mode it
+		     scrolls sideways from the right, exactly as the reader does. -->
 		<div class="mb-6 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-4">
 			<p class="mb-2 text-xs tracking-wide text-[var(--muted)] uppercase">Preview</p>
 			<div
-				class="mx-auto"
-				style="max-width: var(--theme-max-width);
-				font-family: var(--theme-font-family);
+				data-vertical={$settings.verticalText}
+				class="reader-content reader-pane {$settings.verticalText ? 'h-64 overflow-x-auto' : ''}"
+				style="font-family: var(--theme-font-family);
 				font-size: var(--theme-font-size);
 				line-height: var(--theme-line-height);
 				text-align: var(--theme-text-align);"
 			>
-				<p style="margin: 0 0 var(--theme-paragraph-spacing) 0;">
+				<p class="reader-paragraph">
 					The harbour had emptied by the time she reached the quay, and the gulls had gone quiet.
 				</p>
-				<p style="margin: 0;">
+				<p class="reader-paragraph" style="margin-block-end: 0;">
 					<span class="hl-preview">This sentence shows the active highlight.</span>
 					The rest of the paragraph stays as it is until the audio reaches it.
 				</p>

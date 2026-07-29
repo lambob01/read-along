@@ -94,6 +94,20 @@ export interface SettingsState {
 	sideMargins: number;
 	paragraphSpacing: number;
 	justify: boolean;
+	/**
+	 * Vertical Japanese typesetting (tategaki): columns run top to bottom and
+	 * advance right to left. Off by default — horizontal suits every language
+	 * the reader handles, vertical only some.
+	 */
+	verticalText: boolean;
+	/**
+	 * How much of the screen's width the vertical reading pane occupies, as a
+	 * percentage. Vertical text scrolls sideways without end, so its horizontal
+	 * extent cannot be capped the way a line length is — the pane itself is
+	 * narrowed and centred, which is what puts gutters either side. No effect
+	 * while reading horizontally.
+	 */
+	verticalWidth: number;
 	hlBg: string;
 	hlFg: string;
 	hlStyle: HighlightStyle;
@@ -170,6 +184,8 @@ export const defaultSettings: SettingsState = {
 	sideMargins: 16,
 	paragraphSpacing: 0.9,
 	justify: false,
+	verticalText: false,
+	verticalWidth: 80,
 	hlBg: '#fef08a',
 	hlFg: '#1e293b',
 	hlStyle: 'background',
@@ -249,6 +265,7 @@ export function applySettingsToDOM(s: SettingsState) {
 	root.style.setProperty('--theme-side-margins', `${s.sideMargins}px`);
 	root.style.setProperty('--theme-paragraph-spacing', `${s.paragraphSpacing}em`);
 	root.style.setProperty('--theme-text-align', s.justify ? 'justify' : 'start');
+	root.style.setProperty('--theme-vertical-width', `${s.verticalWidth}%`);
 	root.style.setProperty('--hl-bg', s.hlBg);
 	root.style.setProperty('--hl-fg', s.hlFg);
 	// Written under their own names rather than straight onto --bg/--fg: an

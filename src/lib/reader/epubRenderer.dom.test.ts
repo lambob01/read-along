@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderEpub } from '$lib/reader/epubRenderer';
 import { alignEpubToCues } from '$lib/sync/align';
 import type { EpubDoc, RawCue } from '$lib/types';
@@ -173,6 +173,41 @@ describe('renderEpub', () => {
 		// jsdom reports zero heights, so only the reservation mechanism is
 		// asserted here, not a real pixel value.
 		expect(first.style.minHeight).not.toBe('');
+		expect(first.style.minWidth).toBe('');
+	});
+
+	it('reserves width instead of height when the text runs vertically', () => {
+		// vertical-rl turns the block axis horizontal, so a placeholder that
+		// held a height open would reserve nothing along the scrolling axis and
+		// the reader would jump every time a chapter unmounted.
+		const real = window.getComputedStyle;
+		vi.spyOn(window, 'getComputedStyle').mockImplementation(((el: Element) => {
+			const style = real.call(window, el);
+			return new Proxy(style, {
+				get: (t, k) => (k === 'writingMode' ? 'vertical-rl' : Reflect.get(t, k))
+			});
+		}) as typeof window.getComputedStyle);
+
+		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
+		const rows = chapters.map(
+			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
+		);
+		const { handle, container, index } = setup(chapters, rows);
+
+		handle.ensureVisible(index.sentences[0].id);
+		handle.ensureVisible(index.sentences.find((s) => s.chapterOrder === 5)!.id);
+
+		const first = container.querySelector('section[data-chapter="0"]') as HTMLElement;
+		expect(first.style.minWidth).not.toBe('');
+		expect(first.style.minHeight).toBe('');
+
+		// Rotating back invalidates the reservation: it was measured on the
+		// other axis and means nothing now.
+		handle.invalidateLayout();
+		expect(first.style.minWidth).toBe('');
+		expect(first.style.minHeight).toBe('');
+
+		vi.restoreAllMocks();
 	});
 
 	it('returns no spans for a sentence whose chapter is unmounted', () => {

@@ -80,6 +80,21 @@ Under throttled timers (a backgrounded tab) the interval check cannot be trusted
 
 Builds normalized character streams for both the EPUB and subtitle, then walks them with two pointers. On divergence (Whisper insertions, omitted front matter, dropped ruby) it re-anchors by exact substring search within a 4000-character window. Each EPUB sentence inherits timing by interpolating within the cue span(s) its characters matched.
 
+### Vertical text (tategaki)
+
+`settings.verticalText` puts `writing-mode: vertical-rl` on the reader via a `data-vertical` attribute. Horizontal stays the default. `vertical-rl` is right-to-left by definition — columns run top to bottom, each new one starts left of the last — so the reader scrolls **horizontally and backwards**, and browsers park the initial scroll position at the right edge themselves.
+
+The reading surface is written in **logical properties** so one set of rules serves both modes: `max-inline-size` is the line length either way, `margin-block-end` is paragraph spacing either way. Physical properties are used only where something really is physical — the header and player bar sit at the top and bottom of the screen whichever way the text runs, so the scroller's padding stays physical.
+
+The two width settings are not the same axis, which is why the labels swap. `maxWidth` is the line length: horizontally that is the column's width, vertically its height ("Column length"), and vertically it is also capped by the height of the window. `verticalWidth` has no horizontal counterpart — vertical text scrolls sideways without end, so there is no width to cap and gutters can only come from narrowing the reading pane itself, which is what `.reader-pane[data-vertical]` does with a physical `width` plus auto left/right margins. Logical spellings would be wrong there: those elements are themselves `vertical-rl`, so `margin-inline` on them means top and bottom.
+
+Two places could not follow that rule and are axis-aware in code instead:
+
+- **`createAutoScroller`** projects rects onto the reading axis (`project()`), negating x under vertical-rl so "further along" is always a larger number. `scrollBy` then takes the negated delta back, which also avoids `scrollLeft`, whose origin in a right-to-left scroller differs between engines. `rootMargin` is baked into an `IntersectionObserver` at construction, so changing mode rebuilds it.
+- **`renderEpub`'s chapter placeholders** reserve space along the block axis, which rotates. It reads the live `writing-mode` off the container and writes `min-height` or `min-width` accordingly — physical rather than `min-block-size`, because the logical form is not reliably reflected in CSSOM and a silently dropped reservation shows up as the reader jumping while it scrolls. `invalidateLayout()` clears the cache when the mode changes, since the stored extents were measured on the other axis.
+
+Notices keep `writing-mode: horizontal-tb` so they stay glanceable, which means their logical properties resolve against _their_ mode, not the reader's — hence the physical sizing in their vertical-mode rule.
+
 ### EPUB renderer (`src/lib/reader/epubRenderer.ts`)
 
 Mounts only the active chapter ± 1 neighbours (chapter windowing) to avoid stalls on long books. Unmounted chapters leave a placeholder `<section>` with a fixed `min-height` so scroll position does not jump. Text nodes are wrapped in `<span class="reader-sentence" data-sid="...">` for highlighting; wrapping happens back-to-front per block so earlier offsets stay valid as the DOM mutates.
