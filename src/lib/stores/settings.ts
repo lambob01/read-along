@@ -53,6 +53,28 @@ export const ankiModeOptions = [
 	{ value: 'create', label: 'Create new card' }
 ] as const;
 
+/**
+ * What the player does once a card has been written. Mining usually interrupts
+ * listening anyway — the sentence has to be re-read to make the card — so where
+ * playback is left matters.
+ */
+export type MinePause = 'none' | 'here' | 'start' | 'end';
+
+export const minePauseOptions: { value: MinePause; label: string; hint: string }[] = [
+	{ value: 'none', label: 'Keep playing', hint: 'Playback is never interrupted.' },
+	{ value: 'here', label: 'Pause here', hint: 'Stops wherever the audio had got to.' },
+	{
+		value: 'start',
+		label: 'Pause at line start',
+		hint: 'Rewinds to the start of the mined line, ready to hear it again.'
+	},
+	{
+		value: 'end',
+		label: 'Pause at line end',
+		hint: 'Stops at the end of the mined line, ready to carry on.'
+	}
+];
+
 /** Which pair of keys steps by cue and which seeks by time. */
 export type ArrowKeyMode = 'time' | 'cue';
 
@@ -127,6 +149,8 @@ export interface SettingsState {
 	/** Seconds of lead-in kept before the sentence, to cover alignment slop. */
 	ankiPadStart: number;
 	ankiPadEnd: number;
+	/** Where playback is left after a card is created or updated. */
+	ankiPauseAfter: MinePause;
 }
 
 export const defaultCustomTheme: CustomTheme = {
@@ -171,7 +195,8 @@ export const defaultSettings: SettingsState = {
 	ankiModel: '',
 	ankiTags: 'read-along',
 	ankiPadStart: 0.25,
-	ankiPadEnd: 0.4
+	ankiPadEnd: 0.4,
+	ankiPauseAfter: 'none'
 };
 
 const STORAGE_KEY = 'reader-settings';

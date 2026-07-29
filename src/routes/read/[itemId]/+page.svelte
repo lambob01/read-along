@@ -152,6 +152,8 @@
 			const kb = Math.round(result.byteLength / 1024);
 			const verb = result.action === 'created' ? 'Created card' : 'Updated last card';
 			showToast('ok', `${verb} · ${kb} KB`);
+			// Only on success: a failed mine has interrupted the user enough.
+			applyMinePause(target);
 		} catch (err) {
 			// Logged as well as shown: the toast has to stay short, and the
 			// stack is what identifies which step gave up.
@@ -161,6 +163,20 @@
 			mining = false;
 			mineProgress = 0;
 		}
+	}
+
+	/**
+	 * Where playback is left once a card has been written. Mining takes as long
+	 * as the line does, so by the time it lands the audio has moved on — which
+	 * of "carry on", "stop here" and "go back to the line" is wanted depends
+	 * entirely on whether the user is listening or studying.
+	 */
+	function applyMinePause(target: { start: number; end: number }) {
+		const mode = $settings.ankiPauseAfter;
+		if (mode === 'none') return;
+		player.pause();
+		if (mode === 'start') seekToCue(target.start);
+		else if (mode === 'end') seekToCue(target.end);
 	}
 
 	/**

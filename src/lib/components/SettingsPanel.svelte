@@ -5,6 +5,7 @@
 		presetThemeOptions,
 		fontOptions,
 		ankiModeOptions,
+		minePauseOptions,
 		arrowKeyOptions,
 		defaultCustomTheme,
 		type SettingsState,
@@ -12,6 +13,7 @@
 		type AnkiMode,
 		type ThemeName,
 		type CustomTheme,
+		type MinePause,
 		type ArrowKeyMode
 	} from '$lib/stores/settings';
 	import { ankiVersion, deckNames, modelNames, modelFieldNames } from '$lib/anki/connect';
@@ -884,6 +886,26 @@
 				<p class="mt-1 text-xs text-[var(--muted)]">
 					Extra audio kept around the line, so a slightly early or late timestamp does not clip a
 					word.
+				</p>
+			</div>
+
+			<div class="border-t border-[var(--border)] pt-5">
+				<span class="mb-2 block text-sm font-medium text-[var(--fg)]">After making a card</span>
+				<div class="grid grid-cols-2 gap-2">
+					{#each minePauseOptions as m}
+						<button
+							onclick={() => patch(() => ({ ankiPauseAfter: m.value as MinePause }))}
+							class="rounded-lg border px-2 py-2 text-xs font-medium transition-colors {m.value ===
+							$settings.ankiPauseAfter
+								? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+								: 'border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]'}"
+						>
+							{m.label}
+						</button>
+					{/each}
+				</div>
+				<p class="mt-1 text-xs text-[var(--muted)]">
+					{minePauseOptions.find((m) => m.value === $settings.ankiPauseAfter)?.hint}
 				</p>
 			</div>
 		{/if}
