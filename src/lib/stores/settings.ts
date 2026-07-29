@@ -36,6 +36,14 @@ export const ankiModeOptions = [
 	{ value: 'create', label: 'Create new card' }
 ] as const;
 
+/** Which pair of keys steps by cue and which seeks by time. */
+export type ArrowKeyMode = 'time' | 'cue';
+
+export const arrowKeyOptions: { value: ArrowKeyMode; label: string }[] = [
+	{ value: 'time', label: 'Seek by time' },
+	{ value: 'cue', label: 'Step by line' }
+];
+
 export interface SettingsState {
 	theme: ThemeName;
 	fontSize: number;
@@ -58,6 +66,14 @@ export interface SettingsState {
 	gapThreshold: number;
 	showNonSpeech: boolean;
 
+	// --- Navigation ----------------------------------------------------------
+	/**
+	 * What the bare arrow keys do. The other behaviour is always available on
+	 * Alt/Option + arrow, so this only decides which one is unmodified.
+	 */
+	arrowKeys: ArrowKeyMode;
+	/** Seconds the time-seek arrows move by. */
+	seekStep: number;
 	// --- Anki mining ---------------------------------------------------------
 	/**
 	 * Off by default because turning it on routes the audio element through a
@@ -103,6 +119,8 @@ export const defaultSettings: SettingsState = {
 	timingOffset: 0,
 	gapThreshold: 1.2,
 	showNonSpeech: false,
+	arrowKeys: 'time',
+	seekStep: 10,
 	ankiEnabled: false,
 	ankiUrl: DEFAULT_ANKI_URL,
 	ankiKey: '',

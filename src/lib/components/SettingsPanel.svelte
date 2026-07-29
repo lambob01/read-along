@@ -4,9 +4,11 @@
 		themeOptions,
 		fontOptions,
 		ankiModeOptions,
+		arrowKeyOptions,
 		type SettingsState,
 		type HighlightStyle,
-		type AnkiMode
+		type AnkiMode,
+		type ArrowKeyMode
 	} from '$lib/stores/settings';
 	import { ankiVersion, deckNames, modelNames, modelFieldNames } from '$lib/anki/connect';
 	import { ankiTarget } from '$lib/anki/mine';
@@ -88,6 +90,29 @@
 	}
 
 	const lineHeights = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.2, 2.5];
+
+	/** Reader shortcuts, listed where they can be looked up rather than guessed. */
+	const shortcuts: { keys: string; what: string }[] = [
+		{ keys: 'Space / K', what: 'Play or pause' },
+		{ keys: '← →', what: 'Seek by time' },
+		{ keys: 'Alt + ← →', what: 'Previous / next line' },
+		{ keys: 'N / P', what: 'Next / previous chapter' },
+		{ keys: '[ ]', what: 'Nudge the sync offset' },
+		{ keys: 'A', what: 'Mine to Anki' }
+	];
+
+	/** The arrow-key rows swap when line-stepping is the unmodified behaviour. */
+	const shownShortcuts = $derived(
+		$settings.arrowKeys === 'time'
+			? shortcuts
+			: shortcuts.map((s) =>
+					s.keys === '← →'
+						? { keys: '← →', what: 'Previous / next line' }
+						: s.keys === 'Alt + ← →'
+							? { keys: 'Alt + ← →', what: 'Seek by time' }
+							: s
+				)
+	);
 
 	const hlStyles: { value: HighlightStyle; label: string }[] = [
 		{ value: 'background', label: 'Fill' },
@@ -398,6 +423,55 @@
 				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
 			/>
 		</label>
+
+		<div class="border-t border-[var(--border)] pt-5">
+			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Arrow keys</span>
+			<div class="grid grid-cols-2 gap-2">
+				{#each arrowKeyOptions as a}
+					<button
+						onclick={() => patch(() => ({ arrowKeys: a.value as ArrowKeyMode }))}
+						class="rounded-lg border px-2 py-2 text-xs font-medium transition-colors {a.value ===
+						$settings.arrowKeys
+							? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+							: 'border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]'}"
+					>
+						{a.label}
+					</button>
+				{/each}
+			</div>
+			<p class="mt-1 text-xs text-[var(--muted)]">
+				Holding Alt always gives the other one, so both are reachable either way.
+			</p>
+		</div>
+
+		<div>
+			<label class="mb-2 flex items-baseline justify-between" for="seek-step">
+				<span class="text-sm font-medium text-[var(--fg)]">Seek step</span>
+				<span class="text-xs text-[var(--muted)] tabular-nums">{$settings.seekStep}s</span>
+			</label>
+			<input
+				id="seek-step"
+				type="range"
+				min="2"
+				max="60"
+				step="1"
+				value={$settings.seekStep}
+				oninput={(e) => patch(() => ({ seekStep: parseFloat(e.currentTarget.value) }))}
+				class="w-full accent-[var(--accent)]"
+			/>
+		</div>
+
+		<div class="border-t border-[var(--border)] pt-5">
+			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Shortcuts</span>
+			<dl class="flex flex-col gap-1.5">
+				{#each shownShortcuts as s}
+					<div class="flex items-baseline justify-between gap-4">
+						<dt class="shrink-0 font-mono text-xs text-[var(--fg)]">{s.keys}</dt>
+						<dd class="text-right text-xs text-[var(--muted)]">{s.what}</dd>
+					</div>
+				{/each}
+			</dl>
+		</div>
 	{/if}
 
 	{#if visible === 'sync'}

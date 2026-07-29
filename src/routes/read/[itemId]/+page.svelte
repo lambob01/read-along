@@ -13,6 +13,7 @@
 	import { getItem, getStreamSession } from '$lib/abs/api';
 	import { mergeCues } from '$lib/sync/merge';
 	import { buildIndex } from '$lib/sync/index';
+	import { cueIndexAt, nextCueStart, prevCueStart } from '$lib/sync/navigate';
 	import { createSyncController, type SyncController } from '$lib/sync/ticker';
 	import { createAutoScroller, type AutoScroller } from '$lib/sync/autoscroll';
 	import { renderParagraphs } from '$lib/reader/renderer';
@@ -553,29 +554,77 @@
 		if (idx >= 0 && idx < chapters.length) player.seek(chapters[idx].start);
 	}
 
+	// --- Line navigation -----------------------------------------------------
+	//
+	// Everything here works in the *highlight's* timeline, not the audio
+	// element's. The sync offset shifts which line is lit for a given audio
+	// position, so a tuned book would otherwise land a fraction of a second into
+	// the wrong place on every jump.
+
+	function highlightTime(): number {
+		const a = player.getAudioElement();
+		return (a?.currentTime ?? $player.currentTime) + effectiveOffset;
+	}
+
+	/** Seeks so playback resumes exactly where `cueTime` is highlighted. */
+	function seekToCue(cueTime: number) {
+		player.seek(cueTime - effectiveOffset);
+	}
+
+	function stepCue(dir: 1 | -1) {
+		const index = $reader.cueIndex;
+		if (!index) return;
+		const t = highlightTime();
+		const target = dir > 0 ? nextCueStart(index, t) : prevCueStart(index, t);
+		if (target === null) {
+			// Off the front of the book: the start is the only place left to go.
+			// Off the end: stay put rather than jumping somewhere arbitrary.
+			if (dir < 0) player.seek(0);
+			return;
+		}
+		seekToCue(target);
+		revealChrome();
+	}
+
 	function handleKeyDown(e: KeyboardEvent) {
+		const el = e.target;
 		if (
-			e.target instanceof HTMLInputElement ||
-			e.target instanceof HTMLSelectElement ||
-			e.target instanceof HTMLButtonElement
+			el instanceof HTMLInputElement ||
+			el instanceof HTMLSelectElement ||
+			el instanceof HTMLTextAreaElement
 		)
 			return;
+		// A focused button activates itself on Space and Enter, so only those two
+		// are ceded to it. Every other shortcut keeps working rather than going
+		// dead on whichever control happened to be clicked last.
+		if (el instanceof HTMLButtonElement && (e.key === ' ' || e.key === 'Enter')) return;
+		// Browser and OS shortcuts keep their meaning; only Alt is ours.
+		if (e.metaKey || e.ctrlKey) return;
+
+		// Alt always selects the *other* arrow behaviour, so line-stepping is
+		// reachable however the setting is left.
+		const stepsLines = $settings.arrowKeys === 'cue' ? !e.altKey : e.altKey;
+
 		switch (e.key) {
 			case ' ':
 				e.preventDefault();
 				handlePlayPause();
 				break;
 			case 'ArrowLeft':
-				player.skipBack(10);
+				e.preventDefault();
+				if (stepsLines) stepCue(-1);
+				else player.skipBack($settings.seekStep);
 				break;
 			case 'ArrowRight':
-				player.skipForward(10);
+				e.preventDefault();
+				if (stepsLines) stepCue(1);
+				else player.skipForward($settings.seekStep);
 				break;
 			case 'j':
-				player.skipBack(10);
+				player.skipBack($settings.seekStep);
 				break;
 			case 'l':
-				player.skipForward(10);
+				player.skipForward($settings.seekStep);
 				break;
 			case 'k':
 				handlePlayPause();
