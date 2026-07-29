@@ -60,6 +60,22 @@ The controller attaches listeners to the **singleton** audio element, which outl
 
 `TimingIndex` is a shared interface satisfied by both `CueIndex` (subtitle path) and `AlignedIndex` (EPUB path), so the ticker is mode-agnostic.
 
+### Line navigation and repeat (`src/lib/sync/navigate.ts`, `quotes.ts`, `repeat.ts`)
+
+All three work in the **highlight's** timeline, not the audio element's — the reader converts with `seekToCue`/`highlightTime` by subtracting the sync offset. Navigating in audio time would land a tuned book a fraction of a second off on every jump.
+
+`navigate.ts` is pure: upper-bound search over `starts` for prev/next line. "Previous" restarts the current line once past a 0.6s grace window, as every media player does.
+
+`buildRepeatUnits` groups lines into **repeat units**: a run from 「 to its matching 」 (with 『』 nesting into the same depth) becomes one unit, because a line of dialogue routinely spans several cues and half an utterance is no use to shadow. It returns a `TimingIndex`, so the controller and the prev/next helpers work over units without knowing they are groups. A stray closer cannot drive the depth negative, and an unclosed 「 is capped at `maxLines` rather than swallowing the rest of the book. `r` and Enter act on units too; Alt+arrow still steps raw lines.
+
+`createRepeatController` pauses at the end of each unit for shadowing. Three things it gets right, each of which was a bug first:
+
+- **It is created once, in `attachSync`, and only enabled/disabled.** Building it inside an `$effect` that reads `$reader` meant the sync ticker — which writes `activeSentenceId` to that same store at every line boundary — tore it down exactly when it was about to fire. Whether the rebuild beat the 25ms tick decided whether the pause happened, so playback ran on for one, two or three lines at random. The reader memoises `buildRepeatUnits` for the same reason: a fresh array each store update would disarm it just as often.
+- **It asks "did a unit end inside the interval I just played?", not "is the playhead past what I armed?"** The latter cannot see a unit shorter than one tick, because by the time it looks, the _next_ unit has already started. On report the scan resumes from the reported end, so one long tick crossing two ends still reports both.
+- **It distinguishes playing from seeking by the size of the jump**, backed by a `seeked` listener that clears the scan. Otherwise a forward seek reads as having played to the end.
+
+Under throttled timers (a backgrounded tab) the interval check cannot be trusted and it falls back to the armed unit plus `slop`, which misses roughly 10% of stops. Repeat mode is an eyes-on feature, so that degradation is deliberate. Like the ticker it attaches to the singleton audio element, so `destroy()` is mandatory.
+
 ### EPUB alignment (`src/lib/sync/align.ts`)
 
 Builds normalized character streams for both the EPUB and subtitle, then walks them with two pointers. On divergence (Whisper insertions, omitted front matter, dropped ruby) it re-anchors by exact substring search within a 4000-character window. Each EPUB sentence inherits timing by interpolating within the cue span(s) its characters matched.

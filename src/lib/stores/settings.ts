@@ -74,6 +74,15 @@ export interface SettingsState {
 	arrowKeys: ArrowKeyMode;
 	/** Seconds the time-seek arrows move by. */
 	seekStep: number;
+	/** Auto-pause at the end of every line, for shadowing. Not persisted per book. */
+	repeatMode: boolean;
+	/**
+	 * Treat a 「…」 run as one repeat unit rather than stopping inside it. A line
+	 * of dialogue usually spans several cues, and half an utterance is no use to
+	 * shadow.
+	 */
+	repeatWholeQuotes: boolean;
+
 	// --- Anki mining ---------------------------------------------------------
 	/**
 	 * Off by default because turning it on routes the audio element through a
@@ -121,6 +130,8 @@ export const defaultSettings: SettingsState = {
 	showNonSpeech: false,
 	arrowKeys: 'time',
 	seekStep: 10,
+	repeatMode: false,
+	repeatWholeQuotes: true,
 	ankiEnabled: false,
 	ankiUrl: DEFAULT_ANKI_URL,
 	ankiKey: '',

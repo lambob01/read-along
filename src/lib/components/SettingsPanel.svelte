@@ -96,6 +96,9 @@
 		{ keys: 'Space / K', what: 'Play or pause' },
 		{ keys: '← →', what: 'Seek by time' },
 		{ keys: 'Alt + ← →', what: 'Previous / next line' },
+		{ keys: 'R', what: 'Repeat the current line' },
+		{ keys: '↵', what: 'Skip to the next line' },
+		{ keys: 'Shift + R', what: 'Toggle repeat mode' },
 		{ keys: 'N / P', what: 'Next / previous chapter' },
 		{ keys: '[ ]', what: 'Nudge the sync offset' },
 		{ keys: 'A', what: 'Mine to Anki' }
@@ -460,6 +463,34 @@
 				class="w-full accent-[var(--accent)]"
 			/>
 		</div>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Repeat mode', 'Pause at the end of every line')}
+			<input
+				type="checkbox"
+				checked={$settings.repeatMode}
+				onchange={(e) => patch(() => ({ repeatMode: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+		<p class="-mt-3 text-xs text-[var(--muted)]">
+			Playback stops when a line finishes. <kbd class="text-[var(--fg)]">R</kbd> plays it again,
+			<kbd class="text-[var(--fg)]">↵</kbd> moves on to the next one.
+		</p>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Keep quotes whole', 'Play right through 「 」 without stopping')}
+			<input
+				type="checkbox"
+				checked={$settings.repeatWholeQuotes}
+				onchange={(e) => patch(() => ({ repeatWholeQuotes: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+		<p class="-mt-3 text-xs text-[var(--muted)]">
+			A line of dialogue usually runs across several cues. With this on, the whole quoted utterance
+			is one repeat unit — including 『 』 nested inside it.
+		</p>
 
 		<div class="border-t border-[var(--border)] pt-5">
 			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Shortcuts</span>

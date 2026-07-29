@@ -14,6 +14,9 @@
 	import { mergeCues } from '$lib/sync/merge';
 	import { buildIndex } from '$lib/sync/index';
 	import { cueIndexAt, nextCueStart, prevCueStart } from '$lib/sync/navigate';
+	import { buildRepeatUnits } from '$lib/sync/quotes';
+	import { createRepeatController, type RepeatController } from '$lib/sync/repeat';
+	import type { TimingIndex } from '$lib/types';
 	import { createSyncController, type SyncController } from '$lib/sync/ticker';
 	import { createAutoScroller, type AutoScroller } from '$lib/sync/autoscroll';
 	import { renderParagraphs } from '$lib/reader/renderer';
@@ -56,6 +59,7 @@
 	let errorState = $state('');
 
 	let syncController: SyncController | null = null;
+	let repeatController: RepeatController | null = null;
 	let autoScroller: AutoScroller | null = null;
 	let highlighter: HighlightHandle | null = null;
 	let epubRender: EpubRenderHandle | null = null;
@@ -374,6 +378,19 @@
 				effectiveOffset
 			);
 			syncController.start();
+
+			repeatController = createRepeatController(audioEl, null, {
+				enabled: $settings.repeatMode,
+				getOffset: () => effectiveOffset,
+				onUnitEnd: (unit) => {
+					pausedUnitStart = unit.start;
+					revealChrome();
+				}
+			});
+			// Force the memo to push the units it has (or build them now): the
+			// effect may already have run before this controller existed.
+			unitsBuiltFrom = null;
+			syncRepeatUnits();
 		}
 
 		if (scrollerEl) {
@@ -403,8 +420,10 @@
 		// re-run on an element that already has one.
 		window.removeEventListener('keydown', handleKeyDown);
 		// The audio element is a singleton that outlives this page, so the
-		// controller's listeners have to come off with it.
+		// controllers' listeners have to come off with it.
 		syncController?.destroy();
+		repeatController?.destroy();
+		repeatController = null;
 		autoScroller?.destroy();
 		highlighter?.reset();
 		epubRender?.destroy();
@@ -586,6 +605,84 @@
 		revealChrome();
 	}
 
+	// --- Repeat mode ---------------------------------------------------------
+	//
+	// The controller is created once, alongside the sync controller, and is then
+	// only enabled/disabled. It must NOT be built inside an `$effect` that reads
+	// `$reader`: the ticker writes `activeSentenceId` to that store at every line
+	// boundary, so the controller would be rebuilt exactly when it was about to
+	// fire, and the pause would be dropped at random. See `repeat.ts`.
+
+	/**
+	 * Start of the unit an auto-pause stopped at, in highlight time. Held as a
+	 * time rather than an id because `activeSentenceId` has usually moved on to
+	 * the next line by then (cues are typically contiguous), so `r` would
+	 * otherwise repeat something that has not been heard.
+	 */
+	let pausedUnitStart = $state<number | null>(null);
+
+	/**
+	 * Lines grouped into repeat units — a 「…」 run counts as one. Rebuilt only
+	 * when its inputs actually change: a fresh array on every store update would
+	 * disarm the controller just as often as rebuilding it did.
+	 */
+	let repeatUnits: TimingIndex | null = null;
+	let unitsBuiltFrom: { index: TimingIndex | null; group: boolean } | null = null;
+
+	function syncRepeatUnits() {
+		const index = $reader.cueIndex ?? null;
+		const group = $settings.repeatWholeQuotes;
+		if (unitsBuiltFrom && unitsBuiltFrom.index === index && unitsBuiltFrom.group === group) return;
+		unitsBuiltFrom = { index, group };
+		repeatUnits = index ? buildRepeatUnits(index, { group }) : null;
+		repeatController?.setIndex(repeatUnits);
+	}
+
+	$effect(syncRepeatUnits);
+
+	$effect(() => {
+		repeatController?.setEnabled($settings.repeatMode);
+	});
+
+	// Resuming clears the latch, so `r` and Enter fall back to whatever is
+	// actually playing once the user moves on.
+	$effect(() => {
+		if ($player.playing) pausedUnitStart = null;
+	});
+
+	/** Start of the repeat unit covering `t`, or the last one to have begun. */
+	function unitStartAt(t: number): number | null {
+		if (!repeatUnits) return null;
+		const i = cueIndexAt(repeatUnits, t);
+		return i >= 0 ? repeatUnits.starts[i] : null;
+	}
+
+	function toggleRepeatMode() {
+		settings.update((s) => ({ ...s, repeatMode: !s.repeatMode }));
+		revealChrome();
+	}
+
+	/** Replays the current unit from its first word. */
+	function repeatLine() {
+		const from = pausedUnitStart ?? unitStartAt(highlightTime());
+		if (from === null) return;
+		seekToCue(from);
+		player.play();
+		revealChrome();
+	}
+
+	/** Moves on to the unit after the current one and plays it. */
+	function advanceLine() {
+		if (!repeatUnits) return;
+		// Stepping from the unit's own start, not from the playhead: after an
+		// auto-pause the playhead sits on the boundary, where "next" is ambiguous.
+		const target = nextCueStart(repeatUnits, pausedUnitStart ?? highlightTime());
+		if (target === null) return;
+		seekToCue(target);
+		player.play();
+		revealChrome();
+	}
+
 	function handleKeyDown(e: KeyboardEvent) {
 		const el = e.target;
 		if (
@@ -619,6 +716,16 @@
 				e.preventDefault();
 				if (stepsLines) stepCue(1);
 				else player.skipForward($settings.seekStep);
+				break;
+			case 'Enter':
+				e.preventDefault();
+				advanceLine();
+				break;
+			case 'r':
+				repeatLine();
+				break;
+			case 'R':
+				toggleRepeatMode();
 				break;
 			case 'j':
 				player.skipBack($settings.seekStep);
@@ -1183,6 +1290,33 @@
 							</button>
 						{/if}
 
+						{#if $reader.cueIndex}
+							<button
+								onclick={toggleRepeatMode}
+								class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {$settings.repeatMode
+									? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+									: 'border-[var(--border)] text-[var(--muted)]'}"
+								aria-pressed={$settings.repeatMode}
+								aria-label="Repeat each line"
+								title="Pause at the end of each line (Shift+R). r repeats, Enter continues."
+							>
+								<svg
+									class="h-4 w-4"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+									stroke-width="2"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4m14-1v2a4 4 0 01-4 4H3"
+									/>
+								</svg>
+								<span class="hidden sm:inline">Repeat</span>
+							</button>
+						{/if}
+
 						<button
 							onclick={toggleAutoScroll}
 							class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {autoScrollLocked
@@ -1201,6 +1335,29 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Repeat prompt. Only while stopped at a line end, since that is the one
+		     moment the two keys mean something specific. -->
+		{#if $settings.repeatMode && pausedUnitStart !== null && !$player.playing && !toast}
+			<div class="pointer-events-none absolute inset-x-0 bottom-28 z-40 flex justify-center px-4">
+				<div
+					class="pointer-events-auto flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--muted)] shadow-[var(--shadow-lg)]"
+				>
+					<button
+						onclick={repeatLine}
+						class="rounded border border-[var(--border)] px-2 py-1 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+					>
+						Repeat <kbd class="text-[var(--muted)]">r</kbd>
+					</button>
+					<button
+						onclick={advanceLine}
+						class="rounded border border-[var(--accent)] bg-[var(--accent-soft)] px-2 py-1 text-xs font-medium text-[var(--accent)]"
+					>
+						Next <kbd class="opacity-70">↵</kbd>
+					</button>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Mining result. Sits above the player bar so it stays readable when
 		     the chrome slides away. -->
