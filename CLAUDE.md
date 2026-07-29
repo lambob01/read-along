@@ -23,9 +23,10 @@ Run a single test file:
 npx vitest run src/lib/sync/normalize.test.ts
 ```
 
-Tests split into two projects by filename suffix:
+Tests split into three projects by filename suffix:
 
 - `*.dom.test.ts` — runs in jsdom (for EPUB parsing, alignment, renderer)
+- `*.svelte.test.ts` — runs in jsdom **with `resolve.conditions: ['browser']`**, for runes outside a component. Without that condition jsdom resolves Svelte's server build, where `$effect` never runs and every such test passes vacuously.
 - `*.test.ts` / `*.spec.ts` — runs in Node (no DOM)
 
 ## Architecture
@@ -154,6 +155,24 @@ most common failure and `connect.ts` names it in the error.
 
 "Last card" is `findNotes` over a configurable query (default `added:1`) taking
 the largest id — Anki note ids are creation timestamps in ms.
+
+### Pushing settings into the reader's controllers
+
+The sync, repeat and autoscroll controllers are all built inside a `requestAnimationFrame` in `onMount`, so they are **still null the first time the reader's effects run**. That makes the shape of those effects load-bearing:
+
+```js
+$effect(() => {
+	controller?.setThing(value); // WRONG: `value` is never read on the first
+}); //                              run, so the effect subscribes to nothing
+//                                  and never fires again
+
+$effect(() => {
+	const v = value; // right: the dependency is registered whether or not
+	controller?.setThing(v); //  the controller exists yet
+});
+```
+
+The wrong form silently freezes a setting until the page is reloaded — it is what made the repeat-mode toggle look stuck. `effect-wiring.svelte.test.ts` pins both forms.
 
 ### Reader chrome
 

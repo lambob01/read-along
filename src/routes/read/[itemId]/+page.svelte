@@ -187,16 +187,22 @@
 	const hasBookOffset = $derived(typeof bookOffset === 'number');
 	const effectiveOffset = $derived(hasBookOffset ? bookOffset : $settings.timingOffset);
 
+	// Every effect that pushes a value into one of these controllers reads it
+	// into a local FIRST. The controllers are built in a `requestAnimationFrame`
+	// inside `onMount`, so they are all still null when effects first run, and
+	// `controller?.set(value)` would short-circuit before evaluating `value` —
+	// leaving the effect with no dependency at all, so it never runs again and
+	// the setting appears frozen until a reload.
 	$effect(() => {
-		syncController?.setOffset(effectiveOffset);
+		const offset = effectiveOffset;
+		syncController?.setOffset(offset);
 	});
 
 	$effect(() => {
-		autoScroller?.setOptions({
-			anchor: $settings.scrollAnchor,
-			smooth: $settings.smoothScroll,
-			vertical: $settings.verticalText
-		});
+		const anchor = $settings.scrollAnchor;
+		const smooth = $settings.smoothScroll;
+		const vertical = $settings.verticalText;
+		autoScroller?.setOptions({ anchor, smooth, vertical });
 	});
 
 	/**
@@ -688,7 +694,8 @@
 	$effect(syncRepeatUnits);
 
 	$effect(() => {
-		repeatController?.setEnabled($settings.repeatMode);
+		const on = $settings.repeatMode;
+		repeatController?.setEnabled(on);
 	});
 
 	// Resuming clears the latch, so `r` and Enter fall back to whatever is

@@ -38,6 +38,20 @@ export default defineConfig({
 					environment: 'jsdom',
 					include: ['src/**/*.dom.{test,spec}.{js,ts}']
 				}
+			},
+			{
+				// Runes outside a component, for testing the reader's reactive
+				// glue. `*.svelte.test.ts` is compiled by the Svelte plugin, but
+				// it also needs the **browser** build of Svelte resolved: under
+				// the default conditions jsdom gets the server build, where
+				// `$effect` is a no-op and every test silently passes.
+				extends: './vite.config.ts',
+				resolve: { conditions: ['browser'] },
+				test: {
+					name: 'svelte',
+					environment: 'jsdom',
+					include: ['src/**/*.svelte.{test,spec}.{js,ts}']
+				}
 			}
 		]
 	}
