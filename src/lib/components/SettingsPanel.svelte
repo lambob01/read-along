@@ -2,12 +2,16 @@
 	import {
 		settings,
 		themeOptions,
+		presetThemeOptions,
 		fontOptions,
 		ankiModeOptions,
 		arrowKeyOptions,
+		defaultCustomTheme,
 		type SettingsState,
 		type HighlightStyle,
 		type AnkiMode,
+		type ThemeName,
+		type CustomTheme,
 		type ArrowKeyMode
 	} from '$lib/stores/settings';
 	import { ankiVersion, deckNames, modelNames, modelFieldNames } from '$lib/anki/connect';
@@ -87,6 +91,48 @@
 	function chooseModel(model: string) {
 		patch(() => ({ ankiModel: model }));
 		loadFields(model);
+	}
+
+	// --- Custom theme --------------------------------------------------------
+
+	const customFields: { key: keyof CustomTheme; label: string }[] = [
+		{ key: 'bg', label: 'Page' },
+		{ key: 'fg', label: 'Text' },
+		{ key: 'accent', label: 'Accent' },
+		{ key: 'accentFg', label: 'On accent' }
+	];
+
+	function patchCustom(key: keyof CustomTheme, value: string) {
+		patch((s) => ({ customTheme: { ...s.customTheme, [key]: value } }));
+	}
+
+	/**
+	 * Reads a built-in theme's colours out of the stylesheet rather than keeping
+	 * a second copy of them here, so editing `app.css` cannot leave the seeds
+	 * quietly wrong. The probe has to be in the document for the custom
+	 * properties to resolve.
+	 */
+	function seedFrom(theme: ThemeName) {
+		if (typeof document === 'undefined') return;
+		const probe = document.createElement('div');
+		probe.dataset.theme = theme;
+		probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+		document.body.appendChild(probe);
+		const cs = getComputedStyle(probe);
+		const read = (prop: string, fallback: string) => {
+			const v = cs.getPropertyValue(prop).trim();
+			// A colour picker only accepts #rrggbb; anything else means the theme
+			// used a form we cannot round-trip, so keep the default.
+			return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
+		};
+		const seeded: CustomTheme = {
+			bg: read('--bg', defaultCustomTheme.bg),
+			fg: read('--fg', defaultCustomTheme.fg),
+			accent: read('--accent', defaultCustomTheme.accent),
+			accentFg: read('--accent-fg', defaultCustomTheme.accentFg)
+		};
+		probe.remove();
+		patch(() => ({ theme: 'custom', customTheme: seeded }));
 	}
 
 	const lineHeights = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.2, 2.5];
@@ -219,6 +265,43 @@
 				{/each}
 			</div>
 		</div>
+
+		{#if $settings.theme === 'custom'}
+			<div class="rounded-lg border border-[var(--border)] p-3">
+				<span class="mb-1 block text-sm font-medium text-[var(--fg)]">Your colours</span>
+				<p class="mb-3 text-xs text-[var(--muted)]">
+					Surfaces, borders and muted text are mixed from these two, so they stay legible whichever
+					pair you pick.
+				</p>
+
+				<div class="grid grid-cols-4 gap-2">
+					{#each customFields as f}
+						<label class="flex flex-col items-center gap-1.5">
+							<input
+								type="color"
+								value={$settings.customTheme[f.key]}
+								oninput={(e) => patchCustom(f.key, e.currentTarget.value)}
+								class="h-9 w-full cursor-pointer rounded border border-[var(--border)] bg-transparent"
+								aria-label="{f.label} colour"
+							/>
+							<span class="text-[11px] text-[var(--muted)]">{f.label}</span>
+						</label>
+					{/each}
+				</div>
+
+				<span class="mt-4 mb-2 block text-xs font-medium text-[var(--fg)]">Start from</span>
+				<div class="flex flex-wrap gap-1.5">
+					{#each presetThemeOptions as t}
+						<button
+							onclick={() => seedFrom(t.value)}
+							class="rounded border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--fg)] transition-colors hover:bg-[var(--surface-hover)]"
+						>
+							{t.label}
+						</button>
+					{/each}
+				</div>
+			</div>
+		{/if}
 
 		<div>
 			<label class="mb-2 block text-sm font-medium text-[var(--fg)]" for="font-family">

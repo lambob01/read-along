@@ -8,10 +8,27 @@ export const themeOptions = [
 	{ value: 'gray', label: 'Gray' },
 	{ value: 'dark', label: 'Dark' },
 	{ value: 'dracula', label: 'Dracula' },
-	{ value: 'oled', label: 'Black' }
+	{ value: 'oled', label: 'Black' },
+	{ value: 'custom', label: 'Custom' }
 ] as const;
 
 export type ThemeName = (typeof themeOptions)[number]['value'];
+
+/** Built-in themes, i.e. the ones a custom theme can be seeded from. */
+export const presetThemeOptions = themeOptions.filter((t) => t.value !== 'custom');
+
+/**
+ * The four colours a user picks; every other surface is mixed from them in CSS
+ * (see `[data-theme='custom']` in app.css). Asking for seven pickers produced
+ * unreadable results more often than not — muted text and borders only work
+ * when they sit a fixed distance from the background.
+ */
+export interface CustomTheme {
+	bg: string;
+	fg: string;
+	accent: string;
+	accentFg: string;
+}
 
 export const fontOptions = [
 	{ value: 'Georgia, serif', label: 'Georgia' },
@@ -46,6 +63,8 @@ export const arrowKeyOptions: { value: ArrowKeyMode; label: string }[] = [
 
 export interface SettingsState {
 	theme: ThemeName;
+	/** Only in effect while `theme` is `custom`, but kept so it survives a switch away and back. */
+	customTheme: CustomTheme;
 	fontSize: number;
 	lineHeight: number;
 	fontFamily: string;
@@ -110,8 +129,16 @@ export interface SettingsState {
 	ankiPadEnd: number;
 }
 
+export const defaultCustomTheme: CustomTheme = {
+	bg: '#09090b',
+	fg: '#f4f4f5',
+	accent: '#818cf8',
+	accentFg: '#09090b'
+};
+
 export const defaultSettings: SettingsState = {
 	theme: 'dark',
+	customTheme: { ...defaultCustomTheme },
 	fontSize: 1,
 	lineHeight: 1.6,
 	fontFamily: 'Georgia, serif',
@@ -160,10 +187,31 @@ function loadSettings(): SettingsState {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (!raw) return { ...defaultSettings };
 		const parsed = JSON.parse(raw) as Partial<SettingsState>;
-		return { ...defaultSettings, ...parsed };
+		// `customTheme` is the one nested object here, so the top-level spread
+		// would drop any colour added after the user last saved.
+		return {
+			...defaultSettings,
+			...parsed,
+			customTheme: { ...defaultCustomTheme, ...(parsed.customTheme ?? {}) }
+		};
 	} catch {
 		return { ...defaultSettings };
 	}
+}
+
+/**
+ * Rough perceived lightness of a `#rrggbb` colour, 0..1. Only used to decide
+ * whether a custom theme wants light or dark shadows; a wrong answer near the
+ * midpoint is invisible, so sRGB luma is precise enough.
+ */
+export function isDarkColor(hex: string): boolean {
+	const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+	if (!m) return false;
+	const n = parseInt(m[1], 16);
+	const r = (n >> 16) & 255;
+	const g = (n >> 8) & 255;
+	const b = n & 255;
+	return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.45;
 }
 
 export function applySettingsToDOM(s: SettingsState) {
@@ -178,6 +226,15 @@ export function applySettingsToDOM(s: SettingsState) {
 	root.style.setProperty('--theme-text-align', s.justify ? 'justify' : 'start');
 	root.style.setProperty('--hl-bg', s.hlBg);
 	root.style.setProperty('--hl-fg', s.hlFg);
+	// Written under their own names rather than straight onto --bg/--fg: an
+	// inline custom property outranks the `[data-theme=…]` rules, so setting
+	// those directly would leak the custom palette into every other theme.
+	// `app.css` maps these across only under `[data-theme='custom']`.
+	root.style.setProperty('--custom-bg', s.customTheme.bg);
+	root.style.setProperty('--custom-fg', s.customTheme.fg);
+	root.style.setProperty('--custom-accent', s.customTheme.accent);
+	root.style.setProperty('--custom-accent-fg', s.customTheme.accentFg);
+	root.dataset.customDark = isDarkColor(s.customTheme.bg) ? 'true' : 'false';
 	root.dataset.theme = s.theme;
 	root.dataset.hlStyle = s.hlStyle;
 }

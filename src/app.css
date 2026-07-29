@@ -103,6 +103,34 @@
 	--accent-fg: #282a36;
 }
 
+/*
+	User-defined theme. Only four colours are picked; the greys between them are
+	mixed here so the relationships that make a theme readable — muted text
+	sitting off the background, a border a little further off — hold whatever
+	pair the user chooses, including an inverted one.
+
+	The `--custom-*` inputs are written to the root element inline by
+	`applySettingsToDOM` and are inert under every other theme.
+*/
+[data-theme='custom'] {
+	--bg: var(--custom-bg);
+	--fg: var(--custom-fg);
+	--accent: var(--custom-accent);
+	--accent-fg: var(--custom-accent-fg);
+	--muted: color-mix(in srgb, var(--custom-fg) 60%, var(--custom-bg));
+	--surface: color-mix(in srgb, var(--custom-fg) 5%, var(--custom-bg));
+	--surface-hover: color-mix(in srgb, var(--custom-fg) 11%, var(--custom-bg));
+	--border: color-mix(in srgb, var(--custom-fg) 18%, var(--custom-bg));
+	--accent-hover: color-mix(in srgb, var(--custom-accent) 80%, var(--custom-fg));
+}
+
+/* The default shadows are tuned for a light page and vanish on a dark one. */
+[data-theme='custom'][data-custom-dark='true'] {
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+	--shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+	--shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
 body {
 	margin: 0;
 	background-color: var(--bg);
