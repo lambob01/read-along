@@ -18,8 +18,15 @@ interface CachedAlignment {
 	stats: AlignmentStats;
 }
 
-/** Bumped when the alignment algorithm changes, invalidating stored results. */
-const ALGORITHM_VERSION = 1;
+/**
+ * Bumped when the alignment algorithm changes, invalidating stored results.
+ *
+ * 2: the cue cursor no longer keeps ground gained by a failed anchor search,
+ *    and a sentence's tail is no longer hunted across the whole book.
+ * 3: a long jump must be corroborated by the text that follows it, so a table
+ *    of contents can no longer drag the cursor past a whole chapter.
+ */
+const ALGORITHM_VERSION = 3;
 
 /**
  * Cache key incorporating both source file sizes: replacing either the EPUB or

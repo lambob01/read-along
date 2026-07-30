@@ -111,12 +111,46 @@ function buildCueStream(cues: RawCue[]): { chars: string[]; spans: CueSpan[] } {
 	return { chars, spans };
 }
 
-/** Window, in characters, searched ahead when re-anchoring after divergence. */
+/**
+ * Window, in characters, searched ahead when re-anchoring *before* a sentence
+ * has matched anything. It has to cover whatever the subtitle carries that the
+ * book does not — a theme song, a chapter announcement, a Whisper hallucination.
+ */
 const REANCHOR_WINDOW = 4000;
+
+/**
+ * The window once a sentence has begun matching, which is far tighter.
+ *
+ * A sentence's cues are contiguous, so the rest of it is nearby by definition.
+ * Searching thousands of characters ahead for the tail of a sentence finds
+ * common phrasing somewhere else in the book instead, and the damage is not
+ * confined to that sentence: the match runs to a timestamp minutes away, and
+ * `finalize` then demotes every sentence that legitimately falls inside the
+ * range it has claimed. One bad jump takes a whole chapter with it.
+ */
+function tailWindow(sentenceLength: number): number {
+	return Math.max(200, sentenceLength * 4);
+}
+
 /** Preferred length of the exact-match run used to re-anchor. */
 const ANCHOR_LEN = 12;
 /** Shortest run accepted when fewer than ANCHOR_LEN characters remain. */
 const MIN_ANCHOR_LEN = 4;
+
+/**
+ * Cue characters a match may skip before it has to be corroborated.
+ *
+ * Skipping some is normal and the wide window exists for it: the recording
+ * carries a theme song, a chapter announcement, a Whisper hallucination that
+ * the book does not. Skipping a lot on the strength of one sentence is not
+ * evidence of anything, because the cursor never rewinds and a wrong jump
+ * strands every sentence whose audio it has leapt over.
+ */
+const LONG_JUMP = 400;
+/** How soon after a match its successor must appear for the jump to stand. */
+const CONTINUITY_WINDOW = 400;
+/** Successors consulted before giving up on corroboration. */
+const CONTINUITY_LOOKAHEAD = 3;
 
 /**
  * Finds where `needle` resumes in `hay` at or after `from`, by locating an
@@ -128,19 +162,57 @@ const MIN_ANCHOR_LEN = 4;
  * never re-anchor. MIN_ANCHOR_LEN floors it, since very short runs match by
  * chance in Japanese and would produce spurious jumps.
  */
-function findAnchor(hay: string[], from: number, needle: string[], needleFrom: number): number {
+function findAnchor(
+	hay: string[],
+	from: number,
+	needle: string[],
+	needleFrom: number,
+	window: number
+): number {
 	const remaining = needle.length - needleFrom;
 	if (remaining < MIN_ANCHOR_LEN) return -1;
 	const len = Math.min(ANCHOR_LEN, remaining);
-	const anchor = needle.slice(needleFrom, needleFrom + len).join('');
-	const limit = Math.min(hay.length, from + REANCHOR_WINDOW);
+	const limit = Math.min(hay.length, from + window);
 
 	for (let i = from; i + len <= limit; i++) {
 		let k = 0;
-		while (k < len && hay[i + k] === anchor[k]) k++;
+		// Element-wise, not against a joined string: an astral codepoint is one
+		// element here but two UTF-16 units in a string, so indexing a joined
+		// anchor desynchronises the comparison from the first rare kanji on.
+		while (k < len && hay[i + k] === needle[needleFrom + k]) k++;
 		if (k === len) return i;
 	}
 	return -1;
+}
+
+/**
+ * Whether the sentences after `nextIndex` continue from `from`, which is what
+ * makes a long jump believable.
+ *
+ * A table of contents is the case this exists for. Its entries are the book's
+ * chapter titles, the narrator reads those titles aloud, so each entry matches
+ * — perfectly, and minutes or hours ahead of where the reading actually is.
+ * Nothing about the match itself gives it away; only what follows does. Real
+ * text continues into the next sentence, a contents entry does not.
+ *
+ * Sentences too short to anchor on (a line of ellipses, an interjection) prove
+ * nothing either way and are stepped over rather than counted as failures.
+ */
+function isCorroborated(
+	cueChars: string[],
+	from: number,
+	sources: SourceSentence[],
+	nextIndex: number
+): boolean {
+	let consulted = 0;
+	for (let j = nextIndex; j < sources.length && consulted < CONTINUITY_LOOKAHEAD; j++) {
+		const next = normalizeStream(sources[j].text).chars;
+		if (next.length < MIN_ANCHOR_LEN) continue;
+		consulted++;
+		if (findAnchor(cueChars, from, next, 0, CONTINUITY_WINDOW) !== -1) return true;
+	}
+	// Nothing left to ask: the end of the book cannot corroborate itself.
+	return consulted === 0;
 }
 
 /** Maps a normalized subtitle offset to a time by interpolating within its cue. */
@@ -213,6 +285,9 @@ export function alignEpubToCues(
 		let firstCueOffset = -1;
 		let lastCueOffset = -1;
 		let local = 0;
+		// Where this sentence started, so a sentence that fails can be made to
+		// cost nothing. See the restore below.
+		const cursorBefore = cueCursor;
 
 		while (local < norm.chars.length) {
 			if (cueCursor < cueChars.length && cueChars[cueCursor] === norm.chars[local]) {
@@ -224,13 +299,28 @@ export function alignEpubToCues(
 				continue;
 			}
 
-			const anchor = findAnchor(cueChars, cueCursor, norm.chars, local);
+			const window = matched === 0 ? REANCHOR_WINDOW : tailWindow(norm.chars.length);
+			const anchor = findAnchor(cueChars, cueCursor, norm.chars, local, window);
 			if (anchor === -1) break;
 			cueCursor = anchor;
 		}
 
 		const ratio = norm.chars.length > 0 ? matched / norm.chars.length : 0;
-		const timed = ratio >= minSentenceMatch && firstCueOffset !== -1;
+		let timed = ratio >= minSentenceMatch && firstCueOffset !== -1;
+
+		// A match that had to leap a long way is only believed if the text after
+		// it carries on from where it landed.
+		if (timed && firstCueOffset - cursorBefore > LONG_JUMP) {
+			timed = isCorroborated(cueChars, lastCueOffset + 1, sourceSentences, i + 1);
+		}
+
+		// The cursor must reflect what was *matched*, never where the search
+		// gave up. A failed anchor search leaves it wherever it stopped looking,
+		// and because it never rewinds, everything the skipped cues belonged to
+		// is stranded — a run of unsynced text whose words are plainly there in
+		// the subtitle. A sentence that matched nothing usable therefore costs
+		// nothing; one that matched resumes immediately after its last character.
+		cueCursor = timed ? lastCueOffset + 1 : cursorBefore;
 
 		let start = 0;
 		let end = 0;

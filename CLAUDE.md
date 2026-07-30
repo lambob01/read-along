@@ -77,9 +77,31 @@ All three work in the **highlight's** timeline, not the audio element's — the 
 
 Under throttled timers (a backgrounded tab) the interval check cannot be trusted and it falls back to the armed unit plus `slop`, which misses roughly 10% of stops. Repeat mode is an eyes-on feature, so that degradation is deliberate. Like the ticker it attaches to the singleton audio element, so `destroy()` is mandatory.
 
+### Read-along, and reading away from it
+
+`settings.readAlong` decides whether the audio drives the page at all. Off, the reader is a plain ebook: `syncController.setEnabled(false)` clears the highlight and stops sampling (`stop()` alone would not hold — the controller listens to the singleton audio element, so its own `play`/`timeupdate` handlers would restart the loop), playback is paused because there is no longer a transport to stop it with, the audio anchor is released, and the arrow keys go back to paging.
+
+Even with it on, the reader has to be able to go elsewhere. Three mechanisms:
+
+- **`detached`** — the autoscroller reports (`onDetach`) that the active line has been scrolled clean off the screen, or out of the mounted window entirely. Auto-scrolling then stands down until the reader asks to come back, rather than dragging them to the narration three seconds later. A "Narration" button (and `f`) calls `goToNarration()`. Detach is judged from a settled scroll position, not from the gesture that started it — a touch fling scrolls long after the finger has gone — and scrolls the autoscroller performed itself are excluded by time, or scrolling back would instantly count as scrolling away.
+- **`nearestCueIndex`** (`navigate.ts`) — where the audio _is_, as opposed to which line is playing. In a stretch alignment could not match there is no active sentence at all, so a seek into one would otherwise leave the text wherever it last was, a chapter behind. Used on every `seeked` and once at load.
+- **The contents button** — the EPUB spine, jumping the reader without moving the audio. In an unmatched chapter it is the only thing that can.
+
+`INSTANT_JUMP_VIEWPORTS` in the autoscroller drops smooth scrolling for jumps over three viewports: a chapter change or a seek across a windowed book can be tens of thousands of pixels, and animating that takes seconds and scrolls through everything in between.
+
 ### EPUB alignment (`src/lib/sync/align.ts`)
 
-Builds normalized character streams for both the EPUB and subtitle, then walks them with two pointers. On divergence (Whisper insertions, omitted front matter, dropped ruby) it re-anchors by exact substring search within a 4000-character window. Each EPUB sentence inherits timing by interpolating within the cue span(s) its characters matched.
+Builds normalized character streams for both the EPUB and subtitle, then walks them with two pointers. On divergence (Whisper insertions, omitted front matter, dropped ruby) it re-anchors by exact substring search ahead of the cursor. Each EPUB sentence inherits timing by interpolating within the cue span(s) its characters matched.
+
+The cue cursor only ever moves forward, so **anything that moves it wrongly is unrecoverable** — every later sentence whose cues lie behind it is stranded, and the symptom is a run of unsynced text whose words are plainly present in the subtitle. Two rules keep it honest, both of which were bugs first:
+
+- **The cursor reflects what was matched, never where the search stopped.** A sentence that ends up timed resumes at `lastCueOffset + 1`; one that fails is rolled back to where it started, so it costs nothing. Previously a failed anchor search kept whatever ground it had covered while looking.
+- **A sentence's tail is searched for nearby, not across the book.** The 4000-character window applies only before a sentence has matched anything, where it has to cover a theme song or a chapter announcement the book does not contain. Once the sentence has started matching, the rest of it is contiguous by definition and the window drops to `max(200, 4 × length)`. Without that, a sentence whose tail the subtitle omits finds those words recurring minutes away, claims the whole span, and `finalize` then demotes every sentence legitimately inside it — one bad jump costing a chapter.
+- **A long jump must be corroborated by what follows it** (`isCorroborated`). Beyond `LONG_JUMP` characters, the match only stands if one of the next few sentences also appears just after the landing point. The case this exists for is the **table of contents**: its entries are the book's chapter titles, the narrator reads those titles aloud, so every entry matches _perfectly_ — hours ahead of where the reading is. Nothing about the match itself gives it away; only the absence of continuation does. On 氷菓 the contents dragged the cursor past the whole opening chapter, leaving that letter at 1 of 30 sentences timed (93.4% overall). With corroboration it is 28 of 30, and the book is 96.4% — the rest being front matter, the contents itself, and lines of bare ellipses that are genuinely unspoken.
+
+`findAnchor` compares stream elements directly rather than indexing a joined string: an astral codepoint (rare kanji such as 𠮟) is one element but two UTF-16 units, so a joined anchor desynchronises from the first such character on.
+
+`ALGORITHM_VERSION` in `epub/cache.ts` must be bumped whenever any of this changes, or readers keep whatever coverage the old algorithm gave them — the cache key is only the item id and the two file sizes.
 
 ### Vertical text (tategaki)
 
@@ -98,7 +120,15 @@ Notices keep `writing-mode: horizontal-tb` so they stay glanceable, which means 
 
 ### EPUB renderer (`src/lib/reader/epubRenderer.ts`)
 
-Mounts only the active chapter ± 1 neighbours (chapter windowing) to avoid stalls on long books. Unmounted chapters leave a placeholder `<section>` with a fixed `min-height` so scroll position does not jump. Text nodes are wrapped in `<span class="reader-sentence" data-sid="...">` for highlighting; wrapping happens back-to-front per block so earlier offsets stay valid as the DOM mutates.
+Mounts only the chapters near an anchor ± 1 neighbour (chapter windowing) to avoid stalls on long books. Text nodes are wrapped in `<span class="reader-sentence" data-sid="...">` for highlighting; wrapping happens back-to-front per block so earlier offsets stay valid as the DOM mutates.
+
+Three things make a windowed book behave like a whole one, and without any of them the reader is trapped in whatever chapter the audio last lit:
+
+- **Every chapter reserves space, mounted or not.** An unmounted chapter is otherwise zero-length, so the scroller is only as long as the mounted window and there is physically nowhere to scroll to. Measured chapters reserve their real extent; the rest are estimated from their character count against the px-per-character rate the measured ones give. Only chapters carrying at least `MIN_SAMPLE_CHARS` of prose calibrate that rate — a 14-character title page occupying a whole block of space implies a rate an order of magnitude too high, which on a real book turned 20 chapters into 800,000px of scrollbar.
+- **Two anchors.** The narration pins one chapter (`ensureVisible`) and the viewport pins another (an `IntersectionObserver` over the chapter hosts); the mounted set is the union. Reading ahead of or behind the audio therefore works across chapters, and keeps working when the audio sits in a stretch alignment could not match. `clearAudioAnchor()` drops the first when read-along is switched off.
+- **`withScrollAnchor` compensates for its own reflow.** Anything changing size before the viewport drags everything after it along, so the chapter the viewport starts in is measured either side of a mount batch and the difference is scrolled back out. `.reader-scroller` sets `overflow-anchor: none` so this is the only correction: the browsers that do scroll anchoring natively do not all agree, and two corrections for one reflow read as a jump.
+
+Placeholder extents are physical (`min-height`/`min-width`, whichever the block axis currently is) rather than `min-block-size`, because the logical form is not reliably reflected in CSSOM and a silently dropped reservation shows up as the reader jumping while it scrolls. `invalidateLayout()` drops every measurement and re-derives; the reader calls it when the writing mode or any type setting changes, since every estimate scales with those.
 
 ### Highlighting (`src/lib/reader/highlight.ts`)
 
