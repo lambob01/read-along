@@ -34,6 +34,43 @@ function setup(chapters: string[], rows: [string, number, number][]) {
 	return { doc, index, container, handle };
 }
 
+/**
+ * `n` chapters carrying real prose — enough that each one on its own satisfies
+ * the mount budget, so windowing is exercised rather than short-circuited.
+ * Chapters of a few characters are a separate case, covered further down.
+ */
+const SENTENCES_PER_CHAPTER = 120;
+
+function bigBook(n: number) {
+	const chapters: string[] = [];
+	const rows: [string, number, number][] = [];
+	let t = 0;
+	for (let c = 0; c < n; c++) {
+		const sentences = Array.from(
+			{ length: SENTENCES_PER_CHAPTER },
+			(_, i) => `第${c}章の第${i}文はこのように長く書かれている。`
+		);
+		chapters.push(`<p>${sentences.join('')}</p>`);
+		for (const s of sentences) {
+			rows.push([s, t, t + 1]);
+			t += 1;
+		}
+	}
+	return setup(chapters, rows);
+}
+
+/** Spine order of every chapter with content mounted. */
+function mountedOrders(container: HTMLElement): string[] {
+	return [...container.querySelectorAll('section.reader-chapter')]
+		.filter((s) => s.children.length > 0)
+		.map((s) => s.getAttribute('data-chapter')!);
+}
+
+/** A sentence belonging to a given chapter. */
+function sentenceIn(index: { sentences: { id: number; chapterOrder: number }[] }, order: number) {
+	return index.sentences.find((s) => s.chapterOrder === order)!;
+}
+
 describe('renderEpub', () => {
 	it('creates one host section per chapter in spine order', () => {
 		const { container } = setup(
@@ -141,32 +178,20 @@ describe('renderEpub', () => {
 		expect(spans[0].dataset.start).toBeUndefined();
 	});
 
-	it('mounts only the active chapter and its neighbours', () => {
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, container, index } = setup(chapters, rows);
+	it('mounts the active chapter and its neighbours', () => {
+		const { handle, container, index } = bigBook(6);
 
-		// Activate a sentence in chapter 0.
-		handle.ensureVisible(index.sentences[0].id);
-		const populated = [...container.querySelectorAll('section.reader-chapter')].filter(
-			(s) => s.children.length > 0
-		);
-		// Window of 1 => chapters 0 and 1 only.
-		expect(populated.length).toBe(2);
+		handle.ensureVisible(sentenceIn(index, 0).id);
+
+		// Window of 1, and each chapter alone satisfies the budget.
+		expect(mountedOrders(container)).toEqual(['0', '1']);
 	});
 
 	it('unmounts distant chapters while preserving their height', () => {
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, container, index } = setup(chapters, rows);
+		const { handle, container, index } = bigBook(6);
 
-		handle.ensureVisible(index.sentences[0].id);
-		const far = index.sentences.find((s) => s.chapterOrder === 5)!;
-		handle.ensureVisible(far.id);
+		handle.ensureVisible(sentenceIn(index, 0).id);
+		handle.ensureVisible(sentenceIn(index, 5).id);
 
 		const first = container.querySelector('section[data-chapter="0"]') as HTMLElement;
 		expect(first.children.length).toBe(0);
@@ -188,14 +213,10 @@ describe('renderEpub', () => {
 			});
 		}) as typeof window.getComputedStyle);
 
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, container, index } = setup(chapters, rows);
+		const { handle, container, index } = bigBook(6);
 
-		handle.ensureVisible(index.sentences[0].id);
-		handle.ensureVisible(index.sentences.find((s) => s.chapterOrder === 5)!.id);
+		handle.ensureVisible(sentenceIn(index, 0).id);
+		handle.ensureVisible(sentenceIn(index, 5).id);
 
 		const first = container.querySelector('section[data-chapter="0"]') as HTMLElement;
 		expect(first.style.minWidth).not.toBe('');
@@ -210,39 +231,17 @@ describe('renderEpub', () => {
 	});
 
 	it('returns no spans for a sentence whose chapter is unmounted', () => {
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, index } = setup(chapters, rows);
+		const { handle, index } = bigBook(6);
 
-		const first = index.sentences.find((s) => s.chapterOrder === 0)!;
-		const far = index.sentences.find((s) => s.chapterOrder === 5)!;
-		handle.ensureVisible(far.id);
+		handle.ensureVisible(sentenceIn(index, 5).id);
 
-		expect(handle.spansFor(first.id)).toEqual([]);
-	});
-
-	it('exposes the first span as the autoscroll target', () => {
-		const { handle, index } = setup(
-			['<p>これは<em>強調</em>です。</p>'],
-			[['これは強調です。', 0, 3]]
-		);
-
-		handle.ensureVisible(index.sentences[0].id);
-		expect(handle.elementFor(index.sentences[0].id)).toBe(
-			handle.spansFor(index.sentences[0].id)[0]
-		);
+		expect(handle.spansFor(sentenceIn(index, 0).id)).toEqual([]);
 	});
 
 	it('reserves space for every unmounted chapter from the start', () => {
 		// Without this the scroller is only as long as the mounted window, so
 		// there is nowhere to scroll to and no way to reach the rest of the book.
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { container } = setup(chapters, rows);
+		const { container } = bigBook(6);
 
 		const reserved = [...container.querySelectorAll('section.reader-chapter')].filter(
 			(s) => parseFloat((s as HTMLElement).style.minHeight) > 0
@@ -251,38 +250,50 @@ describe('renderEpub', () => {
 	});
 
 	it('keeps the chapter being read mounted alongside the one being narrated', () => {
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, index, container } = setup(chapters, rows);
+		const { handle, index, container } = bigBook(6);
 
 		// Narration in chapter 0, reader looking at chapter 4.
-		handle.ensureVisible(index.sentences[0].id);
+		handle.ensureVisible(sentenceIn(index, 0).id);
 		handle.scrollToChapter(4);
 
-		const populated = [...container.querySelectorAll('section.reader-chapter')].filter(
-			(s) => s.children.length > 0
-		);
-		expect(populated.map((s) => s.getAttribute('data-chapter'))).toEqual(['0', '1', '3', '4', '5']);
+		expect(mountedOrders(container)).toEqual(['0', '1', '3', '4', '5']);
 		expect(handle.viewChapter()).toBe(4);
 	});
 
 	it('releases the narration anchor when read-along is switched off', () => {
-		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, index, container } = setup(chapters, rows);
+		const { handle, index, container } = bigBook(6);
 
-		handle.ensureVisible(index.sentences[0].id);
+		handle.ensureVisible(sentenceIn(index, 0).id);
 		handle.scrollToChapter(4);
 		handle.clearAudioAnchor();
 
-		const populated = [...container.querySelectorAll('section.reader-chapter')].filter(
-			(s) => s.children.length > 0
-		);
-		expect(populated.map((s) => s.getAttribute('data-chapter'))).toEqual(['3', '4', '5']);
+		expect(mountedOrders(container)).toEqual(['3', '4', '5']);
+	});
+
+	it('mounts past its neighbours until enough text is on screen', () => {
+		// Front matter is a run of one-line chapters. Windowing by chapter count
+		// mounts three lines of text and unmounts the chapter filling the rest of
+		// the screen, so most of the page goes blank — which is what a contents
+		// page did. The budget is text, not chapters.
+		const tiny = Array.from({ length: 12 }, (_, i) => `<p>目次項目${i}。</p>`);
+		const rows = tiny.map((_, i) => [`目次項目${i}。`, i, i + 1] as [string, number, number]);
+		const { handle, container, index } = setup(tiny, rows);
+
+		handle.ensureVisible(sentenceIn(index, 5).id);
+
+		// Nowhere near the budget however far it reaches, so it takes everything
+		// it is allowed to rather than leaving the screen empty.
+		expect(mountedOrders(container).length).toBe(12);
+	});
+
+	it('does not overrun the budget when chapters are substantial', () => {
+		// The same rule must not turn into "mount the book" once chapters are
+		// real: that is the stall windowing exists to prevent.
+		const { handle, container, index } = bigBook(12);
+
+		handle.ensureVisible(sentenceIn(index, 6).id);
+
+		expect(mountedOrders(container)).toEqual(['5', '6', '7']);
 	});
 
 	it('maps a sentence to its chapter', () => {

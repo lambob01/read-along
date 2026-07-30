@@ -133,8 +133,33 @@ export interface EpubRenderOptions {
  * Extent reserved for an unmounted chapter no estimate covers, in px. Nonzero
  * because a zero-height placeholder is unreachable: the scroller would have no
  * length there, so the chapter could never be scrolled to in order to mount.
+ *
+ * About one line, and deliberately not more. A front matter chapter is a single
+ * line of text; reserving a screenful for it means that mounting it collapses
+ * the page by the difference, and a run of twenty such chapters — a contents
+ * page, a colophon, a half-title — collapses it by thousands of pixels. Every
+ * one of those collapses is a scroll correction fighting the reader's own
+ * scrolling.
  */
-const MIN_PLACEHOLDER = 320;
+const MIN_PLACEHOLDER = 32;
+
+/**
+ * Characters of text to keep mounted around an anchor.
+ *
+ * Windowing by chapter count assumes chapters are all roughly a screenful,
+ * which front matter is not: anchoring on a one-line contents entry with a
+ * one-chapter window mounts three lines of text and unmounts the chapter
+ * filling the rest of the screen, so most of the page goes blank. Counting
+ * characters instead makes the guarantee the reader actually needs — enough
+ * text on screen — and costs nothing extra where chapters really are large.
+ */
+const MOUNT_BUDGET_CHARS = 4000;
+
+/**
+ * Chapters either side of an anchor that the budget may reach for. Bounds the
+ * work when a book is nothing but tiny chapters.
+ */
+const MAX_SPREAD = 12;
 
 /**
  * Prose a chapter must carry before its measurement is allowed to calibrate
@@ -203,6 +228,11 @@ export function renderEpub(
 		for (const s of list) n += s.text.length;
 		chapterChars.set(order, n);
 	}
+	/** Paragraphs per chapter — spacing and ragged last lines scale with these. */
+	const chapterBlocks = new Map<number, number>();
+	for (const b of index.blocks) {
+		chapterBlocks.set(b.chapterOrder, (chapterBlocks.get(b.chapterOrder) ?? 0) + 1);
+	}
 
 	/** Chapter the narration is in, and the one the reader is looking at. */
 	let audioAnchor: number | null = null;
@@ -257,12 +287,50 @@ export function renderEpub(
 		return chars > 0 ? px / chars : null;
 	}
 
+	/**
+	 * What a chapter would occupy under the current type, for before any chapter
+	 * big enough to calibrate from has been mounted.
+	 *
+	 * Without it the whole book falls back to the placeholder floor, and a
+	 * scrollbar claiming a 130,000px book is 1,500px long is not a scrollbar.
+	 * Characters alone are not enough here: paragraph spacing and the half-empty
+	 * last line of every paragraph together account for a third of a chapter's
+	 * height, which is why the naive form came out at half the true size.
+	 *
+	 * One CJK character to the em is the assumption; Latin runs about half that,
+	 * so this over-reserves there. That is the safe direction, and a real
+	 * measurement replaces it the moment the reader arrives.
+	 */
+	function typeMetricEstimate(order: number): number | null {
+		if (typeof getComputedStyle !== 'function') return null;
+		const style = getComputedStyle(container);
+		const fontSize = parseFloat(style.fontSize);
+		if (!Number.isFinite(fontSize) || fontSize <= 0) return null;
+		const lineHeight = parseFloat(style.lineHeight) || fontSize * 1.6;
+
+		// The inline axis is the one lines run along, and it rotates with the
+		// writing mode just as the block axis does.
+		const rect = container.getBoundingClientRect();
+		const inlineExtent = isVertical() ? rect.height : rect.width;
+		if (inlineExtent <= 0) return null;
+
+		const spacing = parseFloat(style.getPropertyValue('--theme-paragraph-spacing')) || 0.9;
+		const charsPerLine = Math.max(10, inlineExtent / fontSize);
+		const chars = chapterChars.get(order) ?? 0;
+		const blocks = chapterBlocks.get(order) ?? 1;
+		// Half a line per paragraph for the ragged last line.
+		const lines = chars / charsPerLine + blocks * 0.5;
+		return lines * lineHeight + blocks * spacing * fontSize;
+	}
+
 	function reservedFor(order: number, rate: number | null): number {
 		const known = measured.get(order);
 		if (known !== undefined && known > 0) return known;
 		const chars = chapterChars.get(order) ?? 0;
-		if (rate === null || chars === 0) return MIN_PLACEHOLDER;
-		return Math.max(MIN_PLACEHOLDER, chars * rate);
+		if (chars === 0) return MIN_PLACEHOLDER;
+		// A rate from real chapters of this very book beats any model of it.
+		if (rate !== null) return Math.max(MIN_PLACEHOLDER, chars * rate);
+		return Math.max(MIN_PLACEHOLDER, typeMetricEstimate(order) ?? MIN_PLACEHOLDER);
 	}
 
 	/**
@@ -404,13 +472,32 @@ export function renderEpub(
 	 * anchors are honoured, so reading away from the narration does not fight
 	 * the narration for what is on screen.
 	 */
+	/**
+	 * Adds the chapters around `anchor` to `keep`: its immediate neighbours
+	 * always, then outwards until enough text is mounted to fill the screen
+	 * several times over.
+	 */
+	function windowAround(anchor: number, keep: Set<number>): void {
+		let budget = MOUNT_BUDGET_CHARS;
+		const take = (order: number) => {
+			if (!chapterByOrder.has(order) || keep.has(order)) return;
+			keep.add(order);
+			budget -= chapterChars.get(order) ?? 0;
+		};
+
+		take(anchor);
+		for (let d = 1; d <= MAX_SPREAD; d++) {
+			if (d > windowSize && budget <= 0) break;
+			take(anchor - d);
+			take(anchor + d);
+		}
+	}
+
 	function reconcile(): void {
 		const keep = new Set<number>();
 		for (const anchor of [audioAnchor, viewAnchor]) {
 			if (anchor === null) continue;
-			for (let o = anchor - windowSize; o <= anchor + windowSize; o++) {
-				if (chapterByOrder.has(o)) keep.add(o);
-			}
+			windowAround(anchor, keep);
 		}
 		if (keep.size === 0) return;
 

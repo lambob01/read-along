@@ -16,7 +16,7 @@
 	import { cueIndexAt, nearestCueIndex, nextCueStart, prevCueStart } from '$lib/sync/navigate';
 	import { buildRepeatUnits } from '$lib/sync/quotes';
 	import { createRepeatController, type RepeatController } from '$lib/sync/repeat';
-	import type { EpubChapter, TimingIndex } from '$lib/types';
+	import type { AlignmentStats, EpubChapter, TimingIndex } from '$lib/types';
 	import { createSyncController, type SyncController } from '$lib/sync/ticker';
 	import { createAutoScroller, type AutoScroller } from '$lib/sync/autoscroll';
 	import { renderParagraphs } from '$lib/reader/renderer';
@@ -95,6 +95,9 @@
 	let textMode = $state<TextSourceMode>('none');
 	/** Fraction of the book that received timing, when in EPUB mode. */
 	let coverage = $state<number | null>(null);
+	/** Full alignment result, for the sync report. */
+	let alignStats = $state<AlignmentStats | null>(null);
+	let showSyncPanel = $state(false);
 	/** Non-fatal explanation when EPUB mode was attempted but not used. */
 	let sourceNotice = $state<string | null>(null);
 
@@ -369,7 +372,14 @@
 		if (chromeTimer) clearTimeout(chromeTimer);
 		chromeTimer = setTimeout(() => {
 			// Never hide chrome out from under an open popover.
-			if (showSettings || showChapterDropdown || showVolumeSlider || showOffsetPanel || showToc) {
+			if (
+				showSettings ||
+				showChapterDropdown ||
+				showVolumeSlider ||
+				showOffsetPanel ||
+				showToc ||
+				showSyncPanel
+			) {
 				scheduleChromeHide();
 				return;
 			}
@@ -455,6 +465,7 @@
 				const index = source.index;
 				const doc = source.doc;
 				coverage = index.stats.coverage;
+				alignStats = index.stats;
 
 				// The ticker only reads starts/ends and sentence ids, so the
 				// aligned index substitutes for a cue index without changes.
@@ -1068,6 +1079,19 @@
 	}
 
 	const rateOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+	/**
+	 * The badge only shouts when something is actually wrong. A book is never
+	 * 100%: covers, contents pages and lines of bare ellipses have no audio, so
+	 * treating anything short of perfect as a fault would cry wolf on every
+	 * book. Below 80% the transcript and the text have genuinely diverged.
+	 */
+	const syncTone = $derived.by(() => {
+		const c = coverage ?? 0;
+		if (c >= 0.95) return 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]';
+		if (c >= 0.8) return 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]';
+		return 'border-red-500/40 bg-red-500/10 text-red-500';
+	});
 </script>
 
 {#if loading}
@@ -1197,6 +1221,82 @@
 					></span>
 				</span>
 			</button>
+
+			<!-- How much of the book has audio timing. Worth surfacing rather than
+			     leaving to a notice: it is the one number that says whether a
+			     book's read-along is trustworthy, and it varies per book. -->
+			{#if alignStats && readAlong}
+				<div class="relative">
+					<button
+						onclick={() => (showSyncPanel = !showSyncPanel)}
+						class="flex items-center gap-1 rounded border px-2 py-1.5 text-xs tabular-nums transition-colors {syncTone}"
+						aria-label="Sync coverage"
+						title="How much of the book is synced to the audio"
+					>
+						<svg
+							class="h-3.5 w-3.5"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+						>
+							<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+						</svg>
+						{Math.round((coverage ?? 0) * 100)}%
+					</button>
+
+					{#if showSyncPanel}
+						<button
+							class="fixed inset-0 z-40 cursor-default"
+							onclick={() => (showSyncPanel = false)}
+							aria-label="Close sync report"
+						></button>
+						<div
+							class="absolute top-full right-0 z-50 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)]"
+						>
+							<div class="mb-2 flex items-baseline justify-between">
+								<span class="text-sm font-medium text-[var(--fg)]">Sync coverage</span>
+								<span class="text-sm text-[var(--accent)] tabular-nums">
+									{Math.round((coverage ?? 0) * 100)}%
+								</span>
+							</div>
+
+							<!-- Two directions, because they fail differently: text with no
+							     audio is usually front matter, audio with no text means the
+							     transcript and the book have diverged. -->
+							<dl class="flex flex-col gap-1.5 text-xs">
+								<div class="flex items-baseline justify-between gap-3">
+									<dt class="text-[var(--muted)]">Lines with audio</dt>
+									<dd class="text-[var(--fg)] tabular-nums">
+										{alignStats.timedSentences.toLocaleString()} of {alignStats.totalSentences.toLocaleString()}
+									</dd>
+								</div>
+								<div class="flex items-baseline justify-between gap-3">
+									<dt class="text-[var(--muted)]">Narration matched to text</dt>
+									<dd class="text-[var(--fg)] tabular-nums">
+										{alignStats.cueCount > 0
+											? Math.round((alignStats.matchedCues / alignStats.cueCount) * 100)
+											: 0}%
+									</dd>
+								</div>
+							</dl>
+
+							<p class="mt-2 text-xs text-[var(--muted)]">
+								{#if (coverage ?? 0) >= 0.95}
+									Everything the narrator reads should highlight.
+								{:else}
+									Unsynced passages are shown but never highlight. Scroll or use the contents to
+									read through them.
+								{/if}
+							</p>
+							<p class="mt-2 text-xs text-[var(--muted)]">
+								A few percent is normal: covers, contents pages and unspoken lines have no audio to
+								sync to.
+							</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
 
 			<!-- Sync offset -->
 			{#if $reader.cueIndex && readAlong}
