@@ -201,13 +201,12 @@ describe('renderEpub', () => {
 		expect(first.style.minWidth).not.toBe('');
 		expect(first.style.minHeight).toBe('');
 
-		// Rotating back invalidates the reservation: it was measured on the
-		// other axis and means nothing now.
-		handle.invalidateLayout();
-		expect(first.style.minWidth).toBe('');
-		expect(first.style.minHeight).toBe('');
-
+		// Rotating back moves the reservation to the other axis: what was
+		// measured across the old block axis means nothing on the new one.
 		vi.restoreAllMocks();
+		handle.invalidateLayout();
+		expect(first.style.minHeight).not.toBe('');
+		expect(first.style.minWidth).toBe('');
 	});
 
 	it('returns no spans for a sentence whose chapter is unmounted', () => {
@@ -234,6 +233,67 @@ describe('renderEpub', () => {
 		expect(handle.elementFor(index.sentences[0].id)).toBe(
 			handle.spansFor(index.sentences[0].id)[0]
 		);
+	});
+
+	it('reserves space for every unmounted chapter from the start', () => {
+		// Without this the scroller is only as long as the mounted window, so
+		// there is nowhere to scroll to and no way to reach the rest of the book.
+		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
+		const rows = chapters.map(
+			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
+		);
+		const { container } = setup(chapters, rows);
+
+		const reserved = [...container.querySelectorAll('section.reader-chapter')].filter(
+			(s) => parseFloat((s as HTMLElement).style.minHeight) > 0
+		);
+		expect(reserved.length).toBe(6);
+	});
+
+	it('keeps the chapter being read mounted alongside the one being narrated', () => {
+		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
+		const rows = chapters.map(
+			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
+		);
+		const { handle, index, container } = setup(chapters, rows);
+
+		// Narration in chapter 0, reader looking at chapter 4.
+		handle.ensureVisible(index.sentences[0].id);
+		handle.scrollToChapter(4);
+
+		const populated = [...container.querySelectorAll('section.reader-chapter')].filter(
+			(s) => s.children.length > 0
+		);
+		expect(populated.map((s) => s.getAttribute('data-chapter'))).toEqual(['0', '1', '3', '4', '5']);
+		expect(handle.viewChapter()).toBe(4);
+	});
+
+	it('releases the narration anchor when read-along is switched off', () => {
+		const chapters = Array.from({ length: 6 }, (_, i) => `<p>第${i}章の文。</p>`);
+		const rows = chapters.map(
+			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
+		);
+		const { handle, index, container } = setup(chapters, rows);
+
+		handle.ensureVisible(index.sentences[0].id);
+		handle.scrollToChapter(4);
+		handle.clearAudioAnchor();
+
+		const populated = [...container.querySelectorAll('section.reader-chapter')].filter(
+			(s) => s.children.length > 0
+		);
+		expect(populated.map((s) => s.getAttribute('data-chapter'))).toEqual(['3', '4', '5']);
+	});
+
+	it('maps a sentence to its chapter', () => {
+		const chapters = Array.from({ length: 3 }, (_, i) => `<p>第${i}章の文。</p>`);
+		const rows = chapters.map(
+			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
+		);
+		const { handle, index } = setup(chapters, rows);
+
+		const inSecond = index.sentences.find((s) => s.chapterOrder === 2)!;
+		expect(handle.chapterOf(inSecond.id)).toBe(2);
 	});
 
 	it('clears the container on destroy', () => {

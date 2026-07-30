@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cueIndexAt, nextCueStart, prevCueStart } from './navigate';
+import { cueIndexAt, nearestCueIndex, nextCueStart, prevCueStart } from './navigate';
 import type { TimingIndex } from '$lib/types';
 
 /** Three lines with a gap between the second and third. */
@@ -74,5 +74,30 @@ describe('prevCueStart', () => {
 	it('returns null at the very start', () => {
 		expect(prevCueStart(idx, 0.1)).toBeNull();
 		expect(prevCueStart(index([]), 1)).toBeNull();
+	});
+});
+
+describe('nearestCueIndex', () => {
+	it('returns the covering line', () => {
+		expect(nearestCueIndex(idx, 1)).toBe(0);
+		expect(nearestCueIndex(idx, 7)).toBe(2);
+	});
+
+	it('picks the nearer side of a gap', () => {
+		// Gap runs 4→6: the audio is unmatched here, but it is still somewhere.
+		expect(nearestCueIndex(idx, 4.4)).toBe(1);
+		expect(nearestCueIndex(idx, 5.6)).toBe(2);
+	});
+
+	it('answers with the first line before the book has started', () => {
+		expect(nearestCueIndex(index([[3, 4]]), 0)).toBe(0);
+	});
+
+	it('stays on the last line past the end of the transcript', () => {
+		expect(nearestCueIndex(idx, 500)).toBe(2);
+	});
+
+	it('has no answer for an empty index', () => {
+		expect(nearestCueIndex(index([]), 1)).toBe(null);
 	});
 });

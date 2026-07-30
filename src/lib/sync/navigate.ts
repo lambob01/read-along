@@ -32,6 +32,32 @@ export function cueIndexAt(index: TimingIndex, time: number): number {
 	return found;
 }
 
+/**
+ * Index of the line nearest `time`, whether or not one covers it.
+ *
+ * `cueIndexAt` answers "which line is playing", and correctly answers "none"
+ * in a gap. This answers "where in the book is the audio", which still has an
+ * answer when the transcript does not cover it — the stretches alignment could
+ * not match, where the highlight goes out but the narration carries on. Without
+ * it a jump into an unmatched passage leaves the text wherever it last was,
+ * which is what strands the reader a chapter behind the narration.
+ *
+ * In a gap it picks whichever side the audio is nearer, so a long unmatched
+ * passage hands over to the following line halfway through rather than sitting
+ * on the last line before it for minutes.
+ */
+export function nearestCueIndex(index: TimingIndex, time: number): number | null {
+	const { starts, ends } = index;
+	if (starts.length === 0) return null;
+	const i = cueIndexAt(index, time);
+	if (i < 0) return 0;
+	const next = i + 1;
+	if (next < starts.length && time > ends[i]) {
+		if (starts[next] - time < time - ends[i]) return next;
+	}
+	return i;
+}
+
 /** Start of the first line beginning after `time`, or null at the end of the book. */
 export function nextCueStart(index: TimingIndex, time: number): number | null {
 	const i = cueIndexAt(index, time) + 1;

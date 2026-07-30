@@ -156,6 +156,144 @@ describe('vertical-rl reading', () => {
 	});
 });
 
+describe('detaching', () => {
+	// The reader scrolling away from the narration used to be undone three
+	// seconds later, which is what made a book with unmatched audio impossible
+	// to read around: every attempt to move was dragged back.
+
+	function scroll(container: HTMLElement) {
+		container.dispatchEvent(new Event('wheel'));
+		container.dispatchEvent(new Event('scroll'));
+	}
+
+	it('reports the reader having scrolled the active line off screen', async () => {
+		vi.useFakeTimers();
+		const container = makeContainer();
+		// Well past the bottom of the 600px-high frame.
+		const el = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		scroll(container);
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+
+	it('reports it when the line is no longer rendered at all', async () => {
+		// Chapter windowing can unmount the narration's chapter outright once
+		// the reader has scrolled far enough away.
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const el = makeSentence({ x: 0, y: 100, w: 400, h: 40 });
+		const onDetach = vi.fn();
+		let mounted: HTMLElement | undefined = el;
+		const s = createAutoScroller(
+			container,
+			() => mounted,
+			{ anchor: 0.4, smooth: false },
+			{ onDetach }
+		);
+
+		s.scrollTo(1);
+		mounted = undefined;
+		scroll(container);
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+
+	it('leaves a small nudge alone', async () => {
+		vi.useFakeTimers();
+		const container = makeContainer();
+		// Off the anchor but still on the screen: the reader is reading, not
+		// going somewhere.
+		const el = makeSentence({ x: 0, y: 500, w: 400, h: 40 });
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		scroll(container);
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).not.toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+
+	it('does not detach on a scroll declared as a layout correction', async () => {
+		// Chapter windowing scrolls to cancel out its own reflow. Every chapter
+		// boundary does it, and untagged it would report the reader as having
+		// walked away from a book they were sitting still and listening to.
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const el = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		await vi.advanceTimersByTimeAsync(2000);
+		s.noteProgrammaticScroll();
+		container.dispatchEvent(new Event('scroll'));
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).not.toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+
+	it('does not detach on the scroll it performed itself', async () => {
+		// Otherwise scrolling back to the narration would immediately count as
+		// scrolling away from it, and the button would never work twice.
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const el = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		// scrollBy is stubbed, so the element does not actually move — the only
+		// thing keeping this quiet is that the scroll was ours.
+		container.dispatchEvent(new Event('scroll'));
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).not.toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+});
+
+describe('long jumps', () => {
+	it('goes instantly rather than animating across the book', () => {
+		// A chapter jump or a seek can be tens of thousands of pixels. Animating
+		// that takes seconds and scrolls through everything in between.
+		const container = makeContainer();
+		const behaviors: (ScrollBehavior | undefined)[] = [];
+		container.scrollBy = ((opts: ScrollToOptions) => {
+			behaviors.push(opts.behavior);
+			scrolls.push({ top: opts.top ?? 0, left: opts.left ?? 0 });
+		}) as HTMLElement['scrollBy'];
+
+		const near = makeSentence({ x: 0, y: 500, w: 400, h: 40 });
+		const far = makeSentence({ x: 0, y: 40000, w: 400, h: 40 });
+		let el = near;
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: true });
+
+		s.scrollTo(1);
+		expect(behaviors[0]).toBe('smooth');
+
+		el = far;
+		s.scrollTo(2);
+		expect(behaviors[1]).toBe('auto');
+		s.destroy();
+	});
+});
+
 describe('switching writing mode', () => {
 	it('changes which axis is scrolled without rebuilding the scroller', () => {
 		const container = makeContainer();

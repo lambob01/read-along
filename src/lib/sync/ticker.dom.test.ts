@@ -319,6 +319,47 @@ describe('createSyncController', () => {
 		controller.destroy();
 	});
 
+	it('goes quiet when read-along is switched off', () => {
+		// Only `setEnabled` will do: the controller listens to a singleton audio
+		// element, so `stop()` leaves its own `timeupdate` and `play` handlers to
+		// start the loop up again on the next tick.
+		const { audio, seen, controller } = setup();
+		audio.currentTime = 1.5;
+		play(audio);
+		flushFrames(1);
+		expect(seen).toEqual([0]);
+
+		controller.setEnabled(false);
+		// The line that was lit has to go out, not freeze on the page.
+		expect(seen).toEqual([0, null]);
+
+		audio.currentTime = 3.5;
+		audio.emit('timeupdate');
+		flushFrames(3);
+		expect(seen).toEqual([0, null]);
+
+		controller.destroy();
+	});
+
+	it('picks the audio back up when read-along is switched on', () => {
+		const { audio, seen, controller } = setup();
+		audio.currentTime = 1.5;
+		play(audio);
+		flushFrames(1);
+		controller.setEnabled(false);
+
+		audio.currentTime = 3.5;
+		controller.setEnabled(true);
+		expect(seen.at(-1)).toBe(1);
+
+		// And the loop is running again, not just the one sample.
+		audio.currentTime = 1.5;
+		flushFrames(1);
+		expect(seen.at(-1)).toBe(0);
+
+		controller.destroy();
+	});
+
 	it('detaches its listeners on destroy', () => {
 		const { audio, controller } = setup();
 		expect(audio.listenerCount('play')).toBe(1);

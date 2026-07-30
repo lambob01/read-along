@@ -11,6 +11,13 @@ export interface SyncController {
 	 * paused.
 	 */
 	setOffset(seconds: number): void;
+	/**
+	 * Turns highlighting off without tearing the controller down. Disabled, it
+	 * clears the active sentence and stops sampling — the audio element is a
+	 * singleton, so `stop()` alone would not hold: its own `play` and
+	 * `timeupdate` listeners would start the loop again on the next tick.
+	 */
+	setEnabled(on: boolean): void;
 	/** Detaches the audio listeners. The audio element outlives this page. */
 	destroy(): void;
 }
@@ -28,6 +35,7 @@ export function createSyncController(
 	const frameDeltas: number[] = [];
 	let lastFrameTime = 0;
 	let offset = initialOffset;
+	let enabled = true;
 
 	let activeId: number | null = null;
 
@@ -86,7 +94,7 @@ export function createSyncController(
 
 	/** One synchronous sample. Safe to call outside the loop (paused, seeked). */
 	function evaluate() {
-		if (!audio) return;
+		if (!audio || !enabled) return;
 		setActive(findSentence(audio.currentTime + offset));
 	}
 
@@ -172,6 +180,7 @@ export function createSyncController(
 	}
 
 	function handlePlay() {
+		if (!enabled) return;
 		switchToRAF();
 	}
 
@@ -203,7 +212,7 @@ export function createSyncController(
 	return {
 		start() {
 			evaluate();
-			if (audio.paused) return;
+			if (!enabled || audio.paused) return;
 			switchToRAF();
 		},
 		stop() {
@@ -219,6 +228,21 @@ export function createSyncController(
 			offset = seconds;
 			cursor = 0;
 			evaluate();
+		},
+		setEnabled(on: boolean) {
+			if (on === enabled) return;
+			enabled = on;
+			if (!on) {
+				usingRAF = false;
+				clearTimers();
+				// Clearing through `setActive` rather than the flag alone, so the
+				// page's highlight effect runs and the last lit line goes out.
+				setActive(null);
+				return;
+			}
+			cursor = 0;
+			evaluate();
+			if (!audio.paused) switchToRAF();
 		},
 		destroy() {
 			usingRAF = false;

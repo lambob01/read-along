@@ -116,6 +116,13 @@ export interface SettingsState {
 	smoothScroll: boolean;
 	/** Hides the header and player bar until the reader is tapped. */
 	autoHideChrome: boolean;
+	/**
+	 * Whether the audio drives the page at all. Off, the reader is a plain
+	 * ebook: no highlight, no auto-scroll, no transport, and nothing pinned to
+	 * where the narration happens to be. Kept in settings rather than per book
+	 * because it is a way of reading, not a property of a title.
+	 */
+	readAlong: boolean;
 	/** Global fallback for per-book sync offset, in seconds. */
 	timingOffset: number;
 	gapThreshold: number;
@@ -192,6 +199,7 @@ export const defaultSettings: SettingsState = {
 	scrollAnchor: 0.4,
 	smoothScroll: true,
 	autoHideChrome: true,
+	readAlong: true,
 	timingOffset: 0,
 	gapThreshold: 1.2,
 	showNonSpeech: false,

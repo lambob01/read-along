@@ -211,6 +211,13 @@ body {
 	   overflows, and pinning the other to `hidden` would clip the text rather
 	   than let it be reached. */
 	overflow: auto;
+	/*
+		Chapter windowing corrects for its own mounts and unmounts (see
+		`withScrollAnchor`). Native scroll anchoring would correct for them too,
+		on its own schedule and not in every engine, and two corrections for one
+		reflow read as a jump. One mechanism, ours, everywhere.
+	*/
+	overflow-anchor: none;
 	/* Top and bottom clear the floating header and player bar, which stay put
 	   whichever way the text runs. */
 	padding: 4rem var(--theme-side-margins) 7rem;
@@ -341,4 +348,10 @@ blockquote.reader-block {
    missing highlight reads as expected rather than as a bug. */
 .reader-sentence[data-untimed='true'] {
 	opacity: 0.65;
+}
+
+/* With read-along off there is no audio for anything to match, so the
+   distinction means nothing and dimming half the book is just damage. */
+[data-readalong='false'] .reader-sentence[data-untimed='true'] {
+	opacity: 1;
 }

@@ -149,7 +149,9 @@
 		{ keys: 'Shift + R', what: 'Toggle repeat mode' },
 		{ keys: 'N / P', what: 'Next / previous chapter' },
 		{ keys: '[ ]', what: 'Nudge the sync offset' },
-		{ keys: 'A', what: 'Mine to Anki' }
+		{ keys: 'A', what: 'Mine to Anki' },
+		{ keys: 'F', what: 'Scroll back to the narration' },
+		{ keys: 'Shift + A', what: 'Read-along on or off' }
 	];
 
 	/** The arrow-key rows swap when line-stepping is the unmodified behaviour. */
@@ -551,6 +553,20 @@
 				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
 			/>
 		</label>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Read along', 'Let the audiobook drive the page')}
+			<input
+				type="checkbox"
+				checked={$settings.readAlong}
+				onchange={(e) => patch(() => ({ readAlong: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+		<p class="-mt-3 text-xs text-[var(--muted)]">
+			Off, this is a plain ebook reader: no highlight, no auto-scroll and no player.
+			<kbd class="text-[var(--fg)]">Shift+A</kbd> switches it either way.
+		</p>
 
 		<label class="flex items-center justify-between gap-4">
 			{@render row('Auto-hide controls', 'Tap the page to show them again')}

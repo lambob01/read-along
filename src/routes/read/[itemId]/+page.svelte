@@ -13,10 +13,10 @@
 	import { getItem, getStreamSession } from '$lib/abs/api';
 	import { mergeCues } from '$lib/sync/merge';
 	import { buildIndex } from '$lib/sync/index';
-	import { cueIndexAt, nextCueStart, prevCueStart } from '$lib/sync/navigate';
+	import { cueIndexAt, nearestCueIndex, nextCueStart, prevCueStart } from '$lib/sync/navigate';
 	import { buildRepeatUnits } from '$lib/sync/quotes';
 	import { createRepeatController, type RepeatController } from '$lib/sync/repeat';
-	import type { TimingIndex } from '$lib/types';
+	import type { EpubChapter, TimingIndex } from '$lib/types';
 	import { createSyncController, type SyncController } from '$lib/sync/ticker';
 	import { createAutoScroller, type AutoScroller } from '$lib/sync/autoscroll';
 	import { renderParagraphs } from '$lib/reader/renderer';
@@ -36,6 +36,32 @@
 	let showChapterDropdown = $state(false);
 	let showVolumeSlider = $state(false);
 	let showOffsetPanel = $state(false);
+	let showToc = $state(false);
+
+	/**
+	 * Whether the audio is driving the page. Off, this is an ebook reader: the
+	 * transport goes away, nothing is highlighted, and windowing follows the
+	 * reader alone.
+	 */
+	const readAlong = $derived($settings.readAlong);
+
+	/**
+	 * The reader has moved away from the narration on purpose — scrolled the
+	 * active line off the screen, or jumped to another chapter — so auto-scroll
+	 * stands down until they ask to come back.
+	 *
+	 * This is separate from `autoScrollLocked`, which is a standing preference.
+	 * Detaching is a fact about right now, and it is what makes it possible to
+	 * read one chapter while the narration is in another. It matters most where
+	 * alignment failed: the highlight cannot follow audio it could not match, so
+	 * without this the reader is pinned to the last line that did match.
+	 */
+	let detached = $state(false);
+
+	/** EPUB spine, for the table of contents. Empty in subtitle mode. */
+	let epubChapters = $state<EpubChapter[]>([]);
+	/** Spine order of the chapter on screen, for the contents list. */
+	let viewChapterOrder = $state<number | null>(null);
 
 	/** ttu-style immersive chrome: the header and player bar fade out while reading. */
 	let chromeVisible = $state(true);
@@ -264,9 +290,67 @@
 			highlighter.activate(el);
 		}
 
-		if (!autoScrollLocked) {
+		// `detached` is the reader having gone somewhere else on purpose. The
+		// highlight above still tracks the audio, so coming back is one tap.
+		if (!autoScrollLocked && !detached) {
 			autoScroller?.scrollTo(id);
 		}
+	});
+
+	/**
+	 * Read-along on or off. Guarded on the value actually changing, because the
+	 * effect re-runs on every settings change and pausing the book each time
+	 * someone drags the font-size slider would be its own bug.
+	 */
+	let lastReadAlong: boolean | null = null;
+	$effect(() => {
+		const on = $settings.readAlong;
+		syncController?.setEnabled(on);
+		if (lastReadAlong === on) return;
+		const isFirstRun = lastReadAlong === null;
+		lastReadAlong = on;
+		if (isFirstRun) return;
+
+		if (on) {
+			// Deliberately does not scroll. Switching read-along on while reading
+			// somewhere else should not rip the page away — if the narration is
+			// elsewhere the reader starts detached and is *offered* the way back.
+			detached = !narrationIsOnScreen();
+			if (!detached) autoScroller?.resume();
+		} else {
+			// An ebook reader with no transport must not leave audio playing
+			// that there is no longer any control to stop.
+			player.pause();
+			detached = false;
+			// Nothing pins the narration's chapter mounted any more, so
+			// windowing follows the reader alone.
+			epubRender?.clearAudioAnchor();
+		}
+	});
+
+	/**
+	 * The placeholders holding unmounted chapters open were measured under the
+	 * old type, and every estimate derived from them scales with it. Left stale,
+	 * the scrollbar lies and the text shifts as chapters mount.
+	 */
+	let lastLayoutKey: string | null = null;
+	$effect(() => {
+		const s = $settings;
+		const key = [
+			s.fontSize,
+			s.lineHeight,
+			s.fontFamily,
+			s.maxWidth,
+			s.sideMargins,
+			s.paragraphSpacing,
+			s.verticalWidth
+		].join('|');
+		if (lastLayoutKey === key) return;
+		const isFirstRun = lastLayoutKey === null;
+		lastLayoutKey = key;
+		if (isFirstRun) return;
+		// After the browser has reflowed to the new type, not during.
+		requestAnimationFrame(() => epubRender?.invalidateLayout());
 	});
 
 	// Chrome hides only while audio is actually playing: a paused reader is
@@ -285,7 +369,7 @@
 		if (chromeTimer) clearTimeout(chromeTimer);
 		chromeTimer = setTimeout(() => {
 			// Never hide chrome out from under an open popover.
-			if (showSettings || showChapterDropdown || showVolumeSlider || showOffsetPanel) {
+			if (showSettings || showChapterDropdown || showVolumeSlider || showOffsetPanel || showToc) {
 				scheduleChromeHide();
 				return;
 			}
@@ -382,9 +466,17 @@
 				};
 				reader.setCueIndex(timingIndex);
 
+				epubChapters = doc.chapters;
+
 				requestAnimationFrame(() => {
 					if (!contentEl) return;
-					epubRender = renderEpub(index, doc.chapters, contentEl);
+					epubRender = renderEpub(index, doc.chapters, contentEl, {
+						scroller: scrollerEl,
+						onViewChapter: handleViewChapter,
+						// Late-bound deliberately: the autoscroller does not exist
+						// until `attachSync`, a few lines below this.
+						onAdjustScroll: () => autoScroller?.noteProgrammaticScroll()
+					});
 					// Mount the opening chapters so there is text before playback.
 					epubRender.ensureVisible(index.sentences[0]?.id ?? 0);
 
@@ -429,10 +521,14 @@
 				(id) => reader.setActiveSentence(id),
 				effectiveOffset
 			);
+			// The controllers are built here, after the effects have already run
+			// once against a null controller, so the current settings have to be
+			// pushed in by hand rather than waited for.
+			syncController.setEnabled($settings.readAlong);
 			syncController.start();
 
 			repeatController = createRepeatController(audioEl, null, {
-				enabled: $settings.repeatMode,
+				enabled: $settings.repeatMode && $settings.readAlong,
 				getOffset: () => effectiveOffset,
 				onUnitEnd: (unit) => {
 					pausedUnitStart = unit.start;
@@ -443,15 +539,94 @@
 			// effect may already have run before this controller existed.
 			unitsBuiltFrom = null;
 			syncRepeatUnits();
+
+			// A seek is the one moment the reading position should chase the
+			// audio unconditionally — including into passages alignment could not
+			// match, where there is no highlight to follow.
+			audioEl.addEventListener('seeked', handleAudioSeeked);
 		}
 
 		if (scrollerEl) {
-			autoScroller = createAutoScroller(scrollerEl, elementFor, {
-				anchor: $settings.scrollAnchor,
-				smooth: $settings.smoothScroll,
-				vertical: $settings.verticalText
-			});
+			autoScroller = createAutoScroller(
+				scrollerEl,
+				elementFor,
+				{
+					anchor: $settings.scrollAnchor,
+					smooth: $settings.smoothScroll,
+					vertical: $settings.verticalText
+				},
+				{ onDetach: () => (detached = true) }
+			);
 		}
+
+		// Open on the narration rather than on chapter one: the bookmark has
+		// usually been restored by now, and if it has not, the `seeked` it
+		// arrives on will bring the text along.
+		if ($settings.readAlong) goToNarration();
+	}
+
+	/**
+	 * Puts the reading position back on the narration. Used by the follow
+	 * button, by seeks, and once at load.
+	 */
+	function goToNarration() {
+		const id = narrationSentenceId();
+		if (id === null) return;
+		detached = false;
+		autoScroller?.resume();
+		epubRender?.ensureVisible(id);
+		// After the mount, not during: the chapter it just added has to be laid
+		// out before there is anything to scroll to.
+		requestAnimationFrame(() => autoScroller?.scrollTo(id));
+	}
+
+	/**
+	 * The sentence the narration is at. Falls back to the nearest timed line
+	 * when nothing covers the playhead, which is what keeps unmatched passages
+	 * navigable instead of stranding the text where the highlight went out.
+	 */
+	function narrationSentenceId(): number | null {
+		if ($reader.activeSentenceId !== null) return $reader.activeSentenceId;
+		const index = $reader.cueIndex;
+		if (!index) return null;
+		const i = nearestCueIndex(index, highlightTime());
+		return i === null ? null : (index.sentences[i]?.id ?? null);
+	}
+
+	/**
+	 * Whether the line being narrated is in the frame. Used to decide, without
+	 * moving anything, whether switching read-along on means "carry on
+	 * together" or "you are reading elsewhere".
+	 */
+	function narrationIsOnScreen(): boolean {
+		const id = narrationSentenceId();
+		if (id === null || !scrollerEl) return true;
+		const el = epubRender ? epubRender.elementFor(id) : $reader.sentenceMap?.get(id);
+		// No element means its chapter is not even mounted.
+		if (!el) return false;
+		const r = el.getBoundingClientRect();
+		const c = scrollerEl.getBoundingClientRect();
+		return $settings.verticalText
+			? r.left < c.right && r.right > c.left
+			: r.top < c.bottom && r.bottom > c.top;
+	}
+
+	function handleAudioSeeked() {
+		if (!$settings.readAlong) return;
+		goToNarration();
+	}
+
+	/**
+	 * Which chapter the reader is looking at, for the contents list.
+	 *
+	 * Deliberately not used to decide that the reader has moved away: the
+	 * viewport crosses into the next chapter during the reader's own scroll at
+	 * every chapter boundary, so a mismatch here means nothing on its own. That
+	 * judgement belongs to the autoscroller, which knows which scrolls it
+	 * caused itself.
+	 */
+	function handleViewChapter(order: number) {
+		viewChapterOrder = order;
 	}
 
 	onDestroy(() => {
@@ -474,6 +649,7 @@
 		window.removeEventListener('keydown', handleKeyDown);
 		// The audio element is a singleton that outlives this page, so the
 		// controllers' listeners have to come off with it.
+		player.getAudioElement()?.removeEventListener('seeked', handleAudioSeeked);
 		syncController?.destroy();
 		repeatController?.destroy();
 		repeatController = null;
@@ -509,9 +685,9 @@
 
 	function toggleAutoScroll() {
 		autoScrollLocked = !autoScrollLocked;
-		if (!autoScrollLocked && $reader.activeSentenceId !== null) {
-			autoScroller?.scrollTo($reader.activeSentenceId);
-		}
+		// Turning it back on is a request to follow the narration again, which
+		// includes coming back from wherever the reader had wandered to.
+		if (!autoScrollLocked) goToNarration();
 	}
 
 	function nudgeOffset(delta: number) {
@@ -694,7 +870,7 @@
 	$effect(syncRepeatUnits);
 
 	$effect(() => {
-		const on = $settings.repeatMode;
+		const on = $settings.repeatMode && $settings.readAlong;
 		repeatController?.setEnabled(on);
 	});
 
@@ -737,6 +913,70 @@
 		revealChrome();
 	}
 
+	// --- Free navigation -----------------------------------------------------
+
+	function toggleReadAlong() {
+		settings.update((s) => ({ ...s, readAlong: !s.readAlong }));
+		revealChrome();
+	}
+
+	function jumpToEpubChapter(order: number) {
+		showToc = false;
+		epubRender?.scrollToChapter(order);
+		// Jumping to a chapter is the clearest possible statement that the
+		// reader is not following the narration right now.
+		if ($settings.readAlong) {
+			detached = true;
+			autoScroller?.suspend();
+		}
+		revealChrome();
+	}
+
+	/**
+	 * One screenful along the reading axis — the ebook reader's page turn.
+	 * Vertical text advances leftwards, so "forward" is a negative physical x.
+	 */
+	function pageScroll(dir: 1 | -1) {
+		const el = scrollerEl;
+		if (!el) return;
+		const vertical = $settings.verticalText;
+		const size = vertical ? el.clientWidth : el.clientHeight;
+		const delta = dir * size * 0.9;
+		el.scrollBy({
+			top: vertical ? 0 : delta,
+			left: vertical ? -delta : 0,
+			behavior: $settings.smoothScroll ? 'smooth' : 'auto'
+		});
+	}
+
+	/**
+	 * Ebook-mode keys: paging only, since there is no audio left to command.
+	 * Both arrow pairs page the book — the horizontal pair reversed under
+	 * vertical text, where the page turns leftwards.
+	 */
+	function handleEbookKey(e: KeyboardEvent): boolean {
+		const vertical = $settings.verticalText;
+		const forward = new Set(['PageDown', 'ArrowDown', vertical ? 'ArrowLeft' : 'ArrowRight']);
+		const back = new Set(['PageUp', 'ArrowUp', vertical ? 'ArrowRight' : 'ArrowLeft']);
+
+		if (e.key === ' ') {
+			e.preventDefault();
+			pageScroll(e.shiftKey ? -1 : 1);
+			return true;
+		}
+		if (forward.has(e.key)) {
+			e.preventDefault();
+			pageScroll(1);
+			return true;
+		}
+		if (back.has(e.key)) {
+			e.preventDefault();
+			pageScroll(-1);
+			return true;
+		}
+		return false;
+	}
+
 	function handleKeyDown(e: KeyboardEvent) {
 		const el = e.target;
 		if (
@@ -751,6 +991,14 @@
 		if (el instanceof HTMLButtonElement && (e.key === ' ' || e.key === 'Enter')) return;
 		// Browser and OS shortcuts keep their meaning; only Alt is ours.
 		if (e.metaKey || e.ctrlKey) return;
+
+		// Read-along off: the transport shortcuts have nothing to act on, and
+		// the keys go back to meaning what they mean in any other book reader.
+		if (!$settings.readAlong) {
+			if (e.key === 'A') toggleReadAlong();
+			else handleEbookKey(e);
+			return;
+		}
 
 		// Alt always selects the *other* arrow behaviour, so line-stepping is
 		// reachable however the setting is left.
@@ -810,6 +1058,12 @@
 			case 'a':
 				if ($settings.ankiEnabled) mineCurrent();
 				break;
+			case 'A':
+				toggleReadAlong();
+				break;
+			case 'f':
+				goToNarration();
+				break;
 		}
 	}
 
@@ -863,8 +1117,89 @@
 				</p>
 			</div>
 
+			<!-- Contents. The one control that moves the reader without moving
+			     the audio, so it is the way out of a chapter the narration is
+			     not in. -->
+			{#if epubChapters.length > 0}
+				<div class="relative">
+					<button
+						onclick={() => (showToc = !showToc)}
+						class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
+						aria-label="Contents"
+						title="Contents"
+					>
+						<svg
+							class="h-5 w-5"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+						>
+							<path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h10" />
+						</svg>
+					</button>
+					{#if showToc}
+						<button
+							class="fixed inset-0 z-40 cursor-default"
+							onclick={() => (showToc = false)}
+							aria-label="Close contents"
+						></button>
+						<div
+							class="absolute top-full right-0 z-50 mt-1 max-h-[70vh] w-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 shadow-[var(--shadow-lg)]"
+						>
+							{#each epubChapters as ch}
+								<button
+									onclick={() => jumpToEpubChapter(ch.order)}
+									class="block w-full px-3 py-2 text-left text-sm text-[var(--fg)] hover:bg-[var(--surface-hover)] {ch.order ===
+									viewChapterOrder
+										? 'bg-[var(--accent-soft)] font-medium text-[var(--accent)]'
+										: ''}"
+								>
+									{ch.title || `Chapter ${ch.order + 1}`}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Read-along on/off. The audiobook and the ebook are the same
+			     page; this decides whether the audio drives it. -->
+			<button
+				onclick={toggleReadAlong}
+				class="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition-colors {readAlong
+					? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+					: 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]'}"
+				role="switch"
+				aria-checked={readAlong}
+				aria-label="Read along with the audiobook"
+				title="Read-along {readAlong ? 'on' : 'off'} (Shift+A)"
+			>
+				<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M4 14v-3a8 8 0 0116 0v3M4 14a2 2 0 012-2h1v6H6a2 2 0 01-2-2v-2zm16 0a2 2 0 00-2-2h-1v6h1a2 2 0 002-2v-2z"
+					/>
+					{#if !readAlong}
+						<path stroke-linecap="round" d="M3 3l18 18" />
+					{/if}
+				</svg>
+				<span
+					class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors {readAlong
+						? 'bg-[var(--accent)]'
+						: 'bg-[var(--border)]'}"
+				>
+					<span
+						class="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all {readAlong
+							? 'left-3'
+							: 'left-0.5'}"
+					></span>
+				</span>
+			</button>
+
 			<!-- Sync offset -->
-			{#if $reader.cueIndex}
+			{#if $reader.cueIndex && readAlong}
 				<div class="relative">
 					<button
 						onclick={() => (showOffsetPanel = !showOffsetPanel)}
@@ -998,6 +1333,7 @@
 			onclick={handleReaderTap}
 			role="presentation"
 			data-vertical={$settings.verticalText}
+			data-readalong={readAlong}
 			class="reader-scroller reader-pane flex-1"
 		>
 			{#if sourceNotice && $reader.cueIndex}
@@ -1010,12 +1346,12 @@
 				>
 					{sourceNotice}
 				</div>
-			{:else if textMode === 'epub' && coverage !== null && coverage < 0.95}
+			{:else if textMode === 'epub' && coverage !== null && coverage < 0.95 && readAlong}
 				<div
 					class="reader-notice rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
 				>
 					{Math.round(coverage * 100)}% of the book is synced to the audio. Unsynced passages are
-					shown but will not highlight.
+					shown but will not highlight — scroll or use the contents to read through them.
 				</div>
 			{/if}
 
@@ -1037,279 +1373,134 @@
 			{/if}
 		</div>
 
-		<!-- Slim progress line, the only chrome that survives immersive mode. -->
-		<div class="pointer-events-none absolute inset-x-0 bottom-0 z-20">
-			<div
-				class="flex items-center justify-between px-3 pb-1 text-[11px] text-[var(--muted)] tabular-nums transition-opacity duration-200 {chromeVisible
-					? 'opacity-0'
-					: 'opacity-100'}"
-			>
-				<span>{Math.round(seekPercent)}%</span>
-				<span>{remainingLabel}</span>
+		<!-- Slim progress line, the only chrome that survives immersive mode.
+		     It reports the audio, so it goes with the rest of the transport. -->
+		{#if readAlong}
+			<div class="pointer-events-none absolute inset-x-0 bottom-0 z-20">
+				<div
+					class="flex items-center justify-between px-3 pb-1 text-[11px] text-[var(--muted)] tabular-nums transition-opacity duration-200 {chromeVisible
+						? 'opacity-0'
+						: 'opacity-100'}"
+				>
+					<span>{Math.round(seekPercent)}%</span>
+					<span>{remainingLabel}</span>
+				</div>
+				<div class="h-0.5 w-full bg-[var(--border)]">
+					<div class="h-full bg-[var(--accent)]" style="width: {seekPercent}%"></div>
+				</div>
 			</div>
-			<div class="h-0.5 w-full bg-[var(--border)]">
-				<div class="h-full bg-[var(--accent)]" style="width: {seekPercent}%"></div>
-			</div>
-		</div>
+		{/if}
 
 		<!-- Player bar -->
-		<div
-			class="absolute inset-x-0 bottom-0 z-30 border-t border-[var(--border)] bg-[var(--surface)] px-2 py-2 transition-transform duration-200 sm:px-3 {chromeVisible
-				? 'translate-y-0'
-				: 'translate-y-full'}"
-		>
-			<div class="mx-auto flex max-w-2xl flex-col gap-1.5 sm:gap-2">
-				<!-- Seek bar -->
-				<div class="flex items-center gap-1.5 sm:gap-2">
-					<span
-						class="min-w-[48px] text-right text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]"
-					>
-						{formatTime($player.currentTime)}
-					</span>
-					<input
-						type="range"
-						min="0"
-						max={$player.duration || 0}
-						value={$player.currentTime}
-						oninput={handleSeek}
-						style="background: linear-gradient(to right, var(--accent) 0%, var(--accent) {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
-						class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
-						aria-label="Seek"
-					/>
-					<span class="min-w-[48px] text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]">
-						{formatTime($player.duration)}
-					</span>
-				</div>
-
-				<!-- Controls row -->
-				<div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-					<!-- Transport buttons -->
-					<div class="flex items-center justify-center gap-0.5 sm:gap-1">
-						<button
-							onclick={goToPrevChapter}
-							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-							aria-label="Previous chapter"
+		{#if readAlong}
+			<div
+				class="absolute inset-x-0 bottom-0 z-30 border-t border-[var(--border)] bg-[var(--surface)] px-2 py-2 transition-transform duration-200 sm:px-3 {chromeVisible
+					? 'translate-y-0'
+					: 'translate-y-full'}"
+			>
+				<div class="mx-auto flex max-w-2xl flex-col gap-1.5 sm:gap-2">
+					<!-- Seek bar -->
+					<div class="flex items-center gap-1.5 sm:gap-2">
+						<span
+							class="min-w-[48px] text-right text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]"
 						>
-							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M16.67 0l2.83 2.829-9.339 9.175 9.339 9.167-2.83 2.829-12.17-11.996z" />
-							</svg>
-						</button>
-
-						<button
-							onclick={() => player.skipBack(10)}
-							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-							aria-label="Skip back 10s"
-						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"
-								/>
-							</svg>
-						</button>
-
-						<button
-							onclick={handlePlayPause}
-							class="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-full p-2.5 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px] sm:p-3"
-							aria-label={$player.playing ? 'Pause' : 'Play'}
-						>
-							{#if $player.playing}
-								<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-									<path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-								</svg>
-							{:else}
-								<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-									<path d="M8 5v14l11-7z" />
-								</svg>
-							{/if}
-						</button>
-
-						<button
-							onclick={() => player.skipForward(10)}
-							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-							aria-label="Skip forward 10s"
-						>
-							<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M11.933 12.8a1 1 0 000-1.6L6.6 7.2A1 1 0 005 8v8a1 1 0 001.6.8l5.333-4zM19.933 12.8a1 1 0 000-1.6l-5.333-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.333-4z"
-								/>
-							</svg>
-						</button>
-
-						<button
-							onclick={goToNextChapter}
-							class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-							aria-label="Next chapter"
-						>
-							<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M7.33 24l-2.83-2.829 9.339-9.175-9.339-9.167 2.83-2.829 12.17 11.996z" />
-							</svg>
-						</button>
+							{formatTime($player.currentTime)}
+						</span>
+						<input
+							type="range"
+							min="0"
+							max={$player.duration || 0}
+							value={$player.currentTime}
+							oninput={handleSeek}
+							style="background: linear-gradient(to right, var(--accent) 0%, var(--accent) {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
+							class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
+							aria-label="Seek"
+						/>
+						<span class="min-w-[48px] text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]">
+							{formatTime($player.duration)}
+						</span>
 					</div>
 
-					<!-- Utility controls -->
-					<div class="flex items-center justify-center gap-1.5 sm:gap-2">
-						<!-- Volume -->
-						<div class="relative">
+					<!-- Controls row -->
+					<div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+						<!-- Transport buttons -->
+						<div class="flex items-center justify-center gap-0.5 sm:gap-1">
 							<button
-								onclick={() => (showVolumeSlider = !showVolumeSlider)}
-								class="flex min-h-[40px] min-w-[40px] items-center justify-center rounded p-1.5 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px]"
-								aria-label="Volume"
+								onclick={goToPrevChapter}
+								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
+								aria-label="Previous chapter"
 							>
-								<svg
-									class="h-4 w-4"
-									fill="none"
-									stroke="currentColor"
-									viewBox="0 0 24 24"
-									stroke-width="2"
-								>
+								<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+									<path d="M16.67 0l2.83 2.829-9.339 9.175 9.339 9.167-2.83 2.829-12.17-11.996z" />
+								</svg>
+							</button>
+
+							<button
+								onclick={() => player.skipBack(10)}
+								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
+								aria-label="Skip back 10s"
+							>
+								<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path
 										stroke-linecap="round"
 										stroke-linejoin="round"
-										d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.5H4a1 1 0 00-1 1v5a1 1 0 001 1h2.5l4 4V4.5l-4 4z"
+										stroke-width="2"
+										d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"
 									/>
 								</svg>
 							</button>
-							{#if showVolumeSlider}
-								<button
-									class="fixed inset-0 z-40 cursor-default"
-									onclick={() => (showVolumeSlider = false)}
-									aria-label="Close volume"
-								></button>
-								<div
-									class="absolute bottom-full left-1/2 z-50 mb-1 flex -translate-x-1/2 flex-col items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-2.5 shadow-[var(--shadow-lg)]"
-								>
-									<span class="text-[11px] text-[var(--muted)] tabular-nums">
-										{volumePercent}%
-									</span>
-									<!--
-										`direction: rtl` is what puts loud at the top: a vertical
-										range runs along the block axis, so `vertical-lr` alone
-										starts at the minimum and fills downwards.
-										The track paints its own level, since an appearance-none
-										range is otherwise fully transparent and gave no feedback
-										at all.
-									-->
-									<input
-										type="range"
-										min="0"
-										max="1"
-										step="0.05"
-										value={$player.volume}
-										oninput={handleVolumeChange}
-										style="background: linear-gradient(to top, var(--accent) 0%, var(--accent) {volumePercent}%, var(--border) {volumePercent}%, var(--border) 100%)"
-										class="h-24 w-2 cursor-pointer appearance-none rounded-full [direction:rtl] [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
-										aria-label="Volume level"
-									/>
-								</div>
-							{/if}
-						</div>
 
-						<!-- Sleep timer -->
-						<div class="relative">
-							<select
-								value={sleepTimer ?? 'off'}
-								onchange={(e) => {
-									const v = e.currentTarget.value;
-									if (v === 'off') setSleepTimer(null);
-									else if (v === 'chapter') setSleepTimer('chapter');
-									else setSleepTimer(parseInt(v));
-								}}
-								class="min-h-[40px] cursor-pointer appearance-none rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1.5 text-xs text-[var(--fg)] sm:min-h-[44px] sm:px-2 sm:text-sm"
-								aria-label="Sleep timer"
-							>
-								{#each sleepPresets as p}
-									<option value={p.value ?? 'off'}>{p.label}</option>
-								{/each}
-							</select>
-							{#if sleepRemaining}
-								<span
-									class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs whitespace-nowrap text-[var(--accent)]"
-								>
-									{sleepRemaining}
-								</span>
-							{/if}
-						</div>
-
-						{#if chapters.length > 0}
-							<div class="relative">
-								<button
-									onclick={() => (showChapterDropdown = !showChapterDropdown)}
-									class="min-h-[40px] max-w-[140px] truncate rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:max-w-[180px] sm:text-sm"
-									aria-label="Chapter"
-								>
-									{currentChapter || 'Chapters'}
-								</button>
-								{#if showChapterDropdown}
-									<button
-										class="fixed inset-0 z-40 cursor-default"
-										onclick={() => (showChapterDropdown = false)}
-										aria-label="Close chapter list"
-									></button>
-									<div
-										class="absolute bottom-full left-1/2 z-50 mb-1 max-h-56 w-72 -translate-x-1/2 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:left-0 sm:w-64 sm:translate-x-0"
-									>
-										{#each chapters as ch, i}
-											<button
-												onclick={() => {
-													jumpToChapter(i);
-													showChapterDropdown = false;
-												}}
-												class="block w-full px-3 py-2.5 text-left text-sm text-[var(--fg)] hover:bg-[var(--border)] sm:py-2 {i ===
-												currentChapterIdx
-													? 'bg-[var(--accent-soft)] font-medium text-[var(--accent)]'
-													: ''}"
-											>
-												{formatTime(ch.start)} — {ch.title}
-											</button>
-										{/each}
-									</div>
-								{/if}
-							</div>
-						{/if}
-
-						<select
-							value={$player.rate}
-							onchange={handleRateChange}
-							class="min-h-[40px] rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1.5 text-xs text-[var(--fg)] sm:min-h-[44px] sm:px-2 sm:text-sm"
-							aria-label="Playback speed"
-						>
-							{#each rateOptions as r}
-								<option value={r}>{r}x</option>
-							{/each}
-						</select>
-
-						{#if $settings.ankiEnabled}
 							<button
-								onclick={mineCurrent}
-								disabled={!canMine}
-								class="flex min-h-[40px] items-center gap-1 rounded border border-[var(--border)] px-2 py-1.5 text-xs text-[var(--fg)] transition-colors hover:bg-[var(--border)] disabled:opacity-40 sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm"
-								aria-label="Mine this sentence to Anki"
-								title="Mine this sentence to Anki (a)"
+								onclick={handlePlayPause}
+								class="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-full p-2.5 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px] sm:p-3"
+								aria-label={$player.playing ? 'Pause' : 'Play'}
 							>
-								{#if mining}
-									<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-										<circle
-											cx="12"
-											cy="12"
-											r="9"
-											stroke="currentColor"
-											stroke-width="2"
-											opacity="0.25"
-										/>
-										<path
-											d="M21 12a9 9 0 00-9-9"
-											stroke="currentColor"
-											stroke-width="2"
-											stroke-linecap="round"
-										/>
+								{#if $player.playing}
+									<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+										<path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
 									</svg>
 								{:else}
+									<svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+										<path d="M8 5v14l11-7z" />
+									</svg>
+								{/if}
+							</button>
+
+							<button
+								onclick={() => player.skipForward(10)}
+								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
+								aria-label="Skip forward 10s"
+							>
+								<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M11.933 12.8a1 1 0 000-1.6L6.6 7.2A1 1 0 005 8v8a1 1 0 001.6.8l5.333-4zM19.933 12.8a1 1 0 000-1.6l-5.333-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.333-4z"
+									/>
+								</svg>
+							</button>
+
+							<button
+								onclick={goToNextChapter}
+								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
+								aria-label="Next chapter"
+							>
+								<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+									<path d="M7.33 24l-2.83-2.829 9.339-9.175-9.339-9.167 2.83-2.829 12.17 11.996z" />
+								</svg>
+							</button>
+						</div>
+
+						<!-- Utility controls -->
+						<div class="flex items-center justify-center gap-1.5 sm:gap-2">
+							<!-- Volume -->
+							<div class="relative">
+								<button
+									onclick={() => (showVolumeSlider = !showVolumeSlider)}
+									class="flex min-h-[40px] min-w-[40px] items-center justify-center rounded p-1.5 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px]"
+									aria-label="Volume"
+								>
 									<svg
 										class="h-4 w-4"
 										fill="none"
@@ -1320,67 +1511,240 @@
 										<path
 											stroke-linecap="round"
 											stroke-linejoin="round"
-											d="M12 4v12m0 0l-4-4m4 4l4-4M5 19h14"
+											d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.5H4a1 1 0 00-1 1v5a1 1 0 001 1h2.5l4 4V4.5l-4 4z"
 										/>
 									</svg>
+								</button>
+								{#if showVolumeSlider}
+									<button
+										class="fixed inset-0 z-40 cursor-default"
+										onclick={() => (showVolumeSlider = false)}
+										aria-label="Close volume"
+									></button>
+									<div
+										class="absolute bottom-full left-1/2 z-50 mb-1 flex -translate-x-1/2 flex-col items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-2.5 shadow-[var(--shadow-lg)]"
+									>
+										<span class="text-[11px] text-[var(--muted)] tabular-nums">
+											{volumePercent}%
+										</span>
+										<!--
+										`direction: rtl` is what puts loud at the top: a vertical
+										range runs along the block axis, so `vertical-lr` alone
+										starts at the minimum and fills downwards.
+										The track paints its own level, since an appearance-none
+										range is otherwise fully transparent and gave no feedback
+										at all.
+									-->
+										<input
+											type="range"
+											min="0"
+											max="1"
+											step="0.05"
+											value={$player.volume}
+											oninput={handleVolumeChange}
+											style="background: linear-gradient(to top, var(--accent) 0%, var(--accent) {volumePercent}%, var(--border) {volumePercent}%, var(--border) 100%)"
+											class="h-24 w-2 cursor-pointer appearance-none rounded-full [direction:rtl] [writing-mode:vertical-lr] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
+											aria-label="Volume level"
+										/>
+									</div>
 								{/if}
-								<span class="hidden sm:inline">
-									{#if !mining}
-										Mine
-									{:else if minePhase === 'preparing'}
-										Loading
-									{:else}
-										{Math.round(mineProgress * 100)}%
-									{/if}
-								</span>
-							</button>
-						{/if}
+							</div>
 
-						{#if $reader.cueIndex}
-							<button
-								onclick={toggleRepeatMode}
-								class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {$settings.repeatMode
-									? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-									: 'border-[var(--border)] text-[var(--muted)]'}"
-								aria-pressed={$settings.repeatMode}
-								aria-label="Repeat each line"
-								title="Pause at the end of each line (Shift+R). r repeats, Enter continues."
-							>
-								<svg
-									class="h-4 w-4"
-									fill="none"
-									stroke="currentColor"
-									viewBox="0 0 24 24"
-									stroke-width="2"
+							<!-- Sleep timer -->
+							<div class="relative">
+								<select
+									value={sleepTimer ?? 'off'}
+									onchange={(e) => {
+										const v = e.currentTarget.value;
+										if (v === 'off') setSleepTimer(null);
+										else if (v === 'chapter') setSleepTimer('chapter');
+										else setSleepTimer(parseInt(v));
+									}}
+									class="min-h-[40px] cursor-pointer appearance-none rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1.5 text-xs text-[var(--fg)] sm:min-h-[44px] sm:px-2 sm:text-sm"
+									aria-label="Sleep timer"
 								>
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4m14-1v2a4 4 0 01-4 4H3"
-									/>
-								</svg>
-								<span class="hidden sm:inline">Repeat</span>
-							</button>
-						{/if}
+									{#each sleepPresets as p}
+										<option value={p.value ?? 'off'}>{p.label}</option>
+									{/each}
+								</select>
+								{#if sleepRemaining}
+									<span
+										class="absolute -top-5 left-1/2 -translate-x-1/2 text-xs whitespace-nowrap text-[var(--accent)]"
+									>
+										{sleepRemaining}
+									</span>
+								{/if}
+							</div>
 
-						<button
-							onclick={toggleAutoScroll}
-							class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {autoScrollLocked
-								? 'border-[var(--border)] text-[var(--muted)]'
-								: 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'}"
-							aria-label={autoScrollLocked ? 'Enable auto-scroll' : 'Disable auto-scroll'}
-						>
-							<span
-								class="inline-block h-2 w-2 rounded-full {autoScrollLocked
-									? 'bg-[var(--muted)]'
-									: 'bg-[var(--accent)]'}"
-							></span>
-							<span class="hidden sm:inline">Autoscroll</span>
-						</button>
+							{#if chapters.length > 0}
+								<div class="relative">
+									<button
+										onclick={() => (showChapterDropdown = !showChapterDropdown)}
+										class="min-h-[40px] max-w-[140px] truncate rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:max-w-[180px] sm:text-sm"
+										aria-label="Chapter"
+									>
+										{currentChapter || 'Chapters'}
+									</button>
+									{#if showChapterDropdown}
+										<button
+											class="fixed inset-0 z-40 cursor-default"
+											onclick={() => (showChapterDropdown = false)}
+											aria-label="Close chapter list"
+										></button>
+										<div
+											class="absolute bottom-full left-1/2 z-50 mb-1 max-h-56 w-72 -translate-x-1/2 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:left-0 sm:w-64 sm:translate-x-0"
+										>
+											{#each chapters as ch, i}
+												<button
+													onclick={() => {
+														jumpToChapter(i);
+														showChapterDropdown = false;
+													}}
+													class="block w-full px-3 py-2.5 text-left text-sm text-[var(--fg)] hover:bg-[var(--border)] sm:py-2 {i ===
+													currentChapterIdx
+														? 'bg-[var(--accent-soft)] font-medium text-[var(--accent)]'
+														: ''}"
+												>
+													{formatTime(ch.start)} — {ch.title}
+												</button>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/if}
+
+							<select
+								value={$player.rate}
+								onchange={handleRateChange}
+								class="min-h-[40px] rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1.5 text-xs text-[var(--fg)] sm:min-h-[44px] sm:px-2 sm:text-sm"
+								aria-label="Playback speed"
+							>
+								{#each rateOptions as r}
+									<option value={r}>{r}x</option>
+								{/each}
+							</select>
+
+							{#if $settings.ankiEnabled}
+								<button
+									onclick={mineCurrent}
+									disabled={!canMine}
+									class="flex min-h-[40px] items-center gap-1 rounded border border-[var(--border)] px-2 py-1.5 text-xs text-[var(--fg)] transition-colors hover:bg-[var(--border)] disabled:opacity-40 sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm"
+									aria-label="Mine this sentence to Anki"
+									title="Mine this sentence to Anki (a)"
+								>
+									{#if mining}
+										<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+											<circle
+												cx="12"
+												cy="12"
+												r="9"
+												stroke="currentColor"
+												stroke-width="2"
+												opacity="0.25"
+											/>
+											<path
+												d="M21 12a9 9 0 00-9-9"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+											/>
+										</svg>
+									{:else}
+										<svg
+											class="h-4 w-4"
+											fill="none"
+											stroke="currentColor"
+											viewBox="0 0 24 24"
+											stroke-width="2"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M12 4v12m0 0l-4-4m4 4l4-4M5 19h14"
+											/>
+										</svg>
+									{/if}
+									<span class="hidden sm:inline">
+										{#if !mining}
+											Mine
+										{:else if minePhase === 'preparing'}
+											Loading
+										{:else}
+											{Math.round(mineProgress * 100)}%
+										{/if}
+									</span>
+								</button>
+							{/if}
+
+							{#if $reader.cueIndex}
+								<button
+									onclick={toggleRepeatMode}
+									class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {$settings.repeatMode
+										? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+										: 'border-[var(--border)] text-[var(--muted)]'}"
+									aria-pressed={$settings.repeatMode}
+									aria-label="Repeat each line"
+									title="Pause at the end of each line (Shift+R). r repeats, Enter continues."
+								>
+									<svg
+										class="h-4 w-4"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+										stroke-width="2"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4m14-1v2a4 4 0 01-4 4H3"
+										/>
+									</svg>
+									<span class="hidden sm:inline">Repeat</span>
+								</button>
+							{/if}
+
+							<button
+								onclick={toggleAutoScroll}
+								class="flex min-h-[40px] items-center gap-1 rounded border px-2 py-1.5 text-xs sm:min-h-[44px] sm:gap-1.5 sm:px-3 sm:text-sm {autoScrollLocked
+									? 'border-[var(--border)] text-[var(--muted)]'
+									: 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'}"
+								aria-label={autoScrollLocked ? 'Enable auto-scroll' : 'Disable auto-scroll'}
+							>
+								<span
+									class="inline-block h-2 w-2 rounded-full {autoScrollLocked
+										? 'bg-[var(--muted)]'
+										: 'bg-[var(--accent)]'}"
+								></span>
+								<span class="hidden sm:inline">Autoscroll</span>
+							</button>
+						</div>
 					</div>
 				</div>
 			</div>
-		</div>
+		{/if}
+
+		<!-- The way back. Shown only once the reader has actually gone somewhere
+		     else, so it is an offer rather than a nag. -->
+		{#if readAlong && detached && $reader.cueIndex}
+			<div class="absolute right-3 bottom-28 z-40">
+				<button
+					onclick={goToNarration}
+					class="flex items-center gap-1.5 rounded-full border border-[var(--accent)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--accent)] shadow-[var(--shadow-lg)]"
+					title="Scroll back to the line being read (f)"
+				>
+					<svg
+						class="h-3.5 w-3.5"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+						stroke-width="2"
+					>
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5" />
+					</svg>
+					Narration
+				</button>
+			</div>
+		{/if}
 
 		<!-- Repeat prompt. Only while stopped at a line end, since that is the one
 		     moment the two keys mean something specific. -->

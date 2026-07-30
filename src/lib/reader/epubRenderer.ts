@@ -87,34 +87,97 @@ export interface EpubRenderHandle {
 	spansFor(sentenceId: number): HTMLElement[];
 	/** First span of a sentence, for autoscroll. */
 	elementFor(sentenceId: number): HTMLElement | undefined;
+	/** Spine order of the chapter a sentence belongs to. */
+	chapterOf(sentenceId: number): number | undefined;
+	/** Spine order of the chapter currently filling the viewport. */
+	viewChapter(): number | null;
+	/** Scrolls the reading surface to the start of a chapter. */
+	scrollToChapter(order: number): void;
+	/**
+	 * Stops the narration pinning a chapter mounted. Called when read-along is
+	 * switched off, so windowing follows the reader alone.
+	 */
+	clearAudioAnchor(): void;
 	/** Mounts every chapter. Used when the book is small enough not to window. */
 	mountAll(): void;
 	/**
-	 * Drops the cached placeholder sizes. Call after the writing mode changes:
-	 * the reserved extents were measured along the old block axis and mean
-	 * nothing once that axis has rotated.
+	 * Drops the cached placeholder sizes. Call after anything that changes how
+	 * the text lays out — writing mode, font size, line height, column width.
+	 * The reserved extents were measured under the old layout and every
+	 * estimate derived from them is wrong once it changes.
 	 */
 	invalidateLayout(): void;
 	destroy(): void;
 }
 
+export interface EpubRenderOptions {
+	/** Chapters kept mounted either side of an anchor. */
+	window?: number;
+	/**
+	 * The scrolling ancestor of `container`. Without it the renderer cannot
+	 * compensate for its own layout changes, and chapters mounting above the
+	 * viewport shift the text under the reader's eyes.
+	 */
+	scroller?: HTMLElement | null;
+	/** Fired when the chapter the reader is looking at changes. */
+	onViewChapter?: (order: number) => void;
+	/**
+	 * Fired immediately before the renderer scrolls to correct its own reflow.
+	 * Whatever else watches the scroller has to be told, or the correction
+	 * reads as the reader having scrolled.
+	 */
+	onAdjustScroll?: () => void;
+}
+
 /**
- * Renders an aligned EPUB into `container`, mounting only the active chapter
- * and its immediate neighbours.
+ * Extent reserved for an unmounted chapter no estimate covers, in px. Nonzero
+ * because a zero-height placeholder is unreachable: the scroller would have no
+ * length there, so the chapter could never be scrolled to in order to mount.
+ */
+const MIN_PLACEHOLDER = 320;
+
+/**
+ * Prose a chapter must carry before its measurement is allowed to calibrate
+ * the estimate for other chapters.
+ *
+ * Front matter is what makes this necessary. A title page is a handful of
+ * characters occupying a whole block of vertical space, so the pixels-per-
+ * character it implies is an order of magnitude too high — measured against a
+ * real book it turned 20 chapters into 800,000px of scrollbar. Below the
+ * threshold a chapter is still measured for its own placeholder; it just does
+ * not get a vote on everyone else's.
+ */
+const MIN_SAMPLE_CHARS = 1000;
+
+/**
+ * Renders an aligned EPUB into `container`, mounting only the chapters near
+ * where the reader or the narration is.
  *
  * Windowing is not optional at this size: a full book carries far more text
  * than a subtitle file, and mounting every chapter reproduces the iOS stalls
- * that windowed cue rendering was introduced to fix. Each chapter gets a
- * placeholder element that retains its measured height, so scroll position does
- * not jump when a chapter unmounts.
+ * that windowed cue rendering was introduced to fix.
+ *
+ * Two things make a windowed book behave like a whole one:
+ *
+ * - **Every chapter reserves space, mounted or not.** An unmounted chapter is
+ *   otherwise zero-length, so the scroller is only as long as the mounted
+ *   window and there is physically nowhere to scroll to — the reader is pinned
+ *   to whatever the audio last lit. Measured chapters reserve their real
+ *   extent; the rest are estimated from their character count against the
+ *   px-per-character rate the measured ones give.
+ * - **Two anchors, not one.** The narration pins one chapter and the viewport
+ *   pins another, and the mounted set is the union. Reading ahead of (or
+ *   behind) the audio therefore works, including across chapters, and stays
+ *   working when the audio sits in a stretch the alignment could not match.
  */
 export function renderEpub(
 	index: AlignedIndex,
 	chapters: EpubChapter[],
 	container: HTMLElement,
-	opts: { window?: number } = {}
+	opts: EpubRenderOptions = {}
 ): EpubRenderHandle {
 	const windowSize = opts.window ?? 1;
+	const scroller = opts.scroller ?? null;
 	container.replaceChildren();
 
 	const byChapter = new Map<number, AlignedSentence[]>();
@@ -131,8 +194,19 @@ export function renderEpub(
 
 	const hosts = new Map<number, HTMLElement>();
 	const mounted = new Map<number, RenderedChapter>();
-	/** Extent an unmounted chapter reserves along the block (scrolling) axis. */
-	const blockSizes = new Map<number, number>();
+	/** Extent a chapter occupies along the block (scrolling) axis, once seen. */
+	const measured = new Map<number, number>();
+	/** Characters of prose per chapter, the basis for estimating the rest. */
+	const chapterChars = new Map<number, number>();
+	for (const [order, list] of byChapter) {
+		let n = 0;
+		for (const s of list) n += s.text.length;
+		chapterChars.set(order, n);
+	}
+
+	/** Chapter the narration is in, and the one the reader is looking at. */
+	let audioAnchor: number | null = null;
+	let viewAnchor: number | null = null;
 
 	/**
 	 * True under `writing-mode: vertical-rl`, where the block axis is
@@ -142,6 +216,116 @@ export function renderEpub(
 	function isVertical(): boolean {
 		if (typeof getComputedStyle !== 'function') return false;
 		return getComputedStyle(container).writingMode.startsWith('vertical');
+	}
+
+	/**
+	 * Where a rect starts along the reading axis. Vertically that is its top;
+	 * under vertical-rl reading arrives from the right and advances leftwards,
+	 * so the near edge is the right one and the axis is measured negated —
+	 * "further into the book" is a larger number in both modes.
+	 */
+	function nearEdge(rect: DOMRect, vertical: boolean): number {
+		return vertical ? -rect.right : rect.top;
+	}
+
+	/** Block-axis extent of a rect. */
+	function extent(rect: DOMRect, vertical: boolean): number {
+		return vertical ? rect.width : rect.height;
+	}
+
+	function measure(order: number, host: HTMLElement, vertical: boolean): void {
+		const size = extent(host.getBoundingClientRect(), vertical);
+		if (size > 0) measured.set(order, size);
+	}
+
+	/**
+	 * Pixels per character under the current layout, from the chapters actually
+	 * measured so far, or null before there are any. One rate for the whole book
+	 * is crude, but it only has to make the scrollbar roughly honest: any
+	 * chapter the reader reaches is measured for real on the way past.
+	 */
+	function pxPerChar(): number | null {
+		let px = 0;
+		let chars = 0;
+		for (const [order, size] of measured) {
+			const c = chapterChars.get(order) ?? 0;
+			if (c >= MIN_SAMPLE_CHARS && size > 0) {
+				px += size;
+				chars += c;
+			}
+		}
+		return chars > 0 ? px / chars : null;
+	}
+
+	function reservedFor(order: number, rate: number | null): number {
+		const known = measured.get(order);
+		if (known !== undefined && known > 0) return known;
+		const chars = chapterChars.get(order) ?? 0;
+		if (rate === null || chars === 0) return MIN_PLACEHOLDER;
+		return Math.max(MIN_PLACEHOLDER, chars * rate);
+	}
+
+	/**
+	 * Gives every unmounted chapter its extent back. Written as physical
+	 * properties rather than `min-block-size` because the logical form is not
+	 * universally reflected in CSSOM, and a silently ignored reservation shows
+	 * up as the reader jumping while it scrolls.
+	 */
+	function applyPlaceholders(vertical: boolean): void {
+		const rate = pxPerChar();
+		for (const [order, host] of hosts) {
+			if (mounted.has(order)) continue;
+			const reserved = `${Math.round(reservedFor(order, rate))}px`;
+			host.style.minHeight = vertical ? '' : reserved;
+			host.style.minWidth = vertical ? reserved : '';
+		}
+	}
+
+	/**
+	 * Runs a batch of mounts and unmounts without moving the text the reader is
+	 * looking at.
+	 *
+	 * Anything changing size *before* the viewport drags everything after it
+	 * along, so the chapter the viewport starts in is measured either side of
+	 * the change and the difference is scrolled back out. The reader's own
+	 * `overflow-anchor: none` leaves this as the only correction, since the
+	 * browsers that do scroll anchoring natively do not all agree and two
+	 * corrections are worse than one.
+	 */
+	function withScrollAnchor(fn: (vertical: boolean) => void): void {
+		const vertical = isVertical();
+		if (!scroller) {
+			fn(vertical);
+			return;
+		}
+
+		const viewNear = nearEdge(scroller.getBoundingClientRect(), vertical);
+		let anchorHost: HTMLElement | null = null;
+		let before = 0;
+		for (const order of orders) {
+			const host = hosts.get(order);
+			if (!host) continue;
+			const near = nearEdge(host.getBoundingClientRect(), vertical);
+			// Hosts are laid out in spine order, so the last one starting at or
+			// before the viewport is the one the viewport starts inside.
+			if (near > viewNear + 1) break;
+			anchorHost = host;
+			before = near;
+		}
+
+		fn(vertical);
+
+		if (!anchorHost) return;
+		const delta = nearEdge(anchorHost.getBoundingClientRect(), vertical) - before;
+		if (Math.abs(delta) < 1) return;
+		opts.onAdjustScroll?.();
+		// `scrollBy` takes physical deltas, so the negated vertical axis is
+		// negated back on the way out.
+		scroller.scrollBy({
+			top: vertical ? 0 : delta,
+			left: vertical ? -delta : 0,
+			behavior: 'auto'
+		});
 	}
 
 	// One host per chapter, in spine order, so scroll geometry is stable.
@@ -154,7 +338,7 @@ export function renderEpub(
 		hosts.set(order, host);
 	}
 
-	function mount(order: number): RenderedChapter | null {
+	function mount(order: number, vertical: boolean): RenderedChapter | null {
 		const existing = mounted.get(order);
 		if (existing) return existing;
 
@@ -200,47 +384,121 @@ export function renderEpub(
 
 		const record: RenderedChapter = { order, el: host, spans };
 		mounted.set(order, record);
+		// Measured on the way in as well as the way out: the first mounted
+		// chapter is what calibrates every other chapter's estimate, and until
+		// something has been measured the whole book is placeholder-sized.
+		measure(order, host, vertical);
 		return record;
 	}
 
-	function unmount(order: number): void {
+	function unmount(order: number, vertical: boolean): void {
 		const record = mounted.get(order);
 		if (!record) return;
-		// Preserve the extent occupied along the scrolling axis so unmounting
-		// does not shift scroll position. That axis is vertical normally and
-		// horizontal under vertical-rl, so the reservation moves between
-		// min-height and min-width. Written as physical properties rather than
-		// `min-block-size` because the logical form is not universally
-		// reflected in CSSOM, and a silently ignored reservation would show up
-		// as the reader jumping while it scrolls.
-		const rect = record.el.getBoundingClientRect();
-		const vertical = isVertical();
-		const size = vertical ? rect.width : rect.height;
-		if (size > 0) blockSizes.set(order, size);
+		measure(order, record.el, vertical);
 		record.el.replaceChildren();
-		const reserved = `${blockSizes.get(order) ?? 0}px`;
-		record.el.style.minHeight = vertical ? '' : reserved;
-		record.el.style.minWidth = vertical ? reserved : '';
 		mounted.delete(order);
 	}
 
-	function ensureChapter(order: number): void {
+	/**
+	 * Mounts the window around every live anchor and unmounts the rest. Both
+	 * anchors are honoured, so reading away from the narration does not fight
+	 * the narration for what is on screen.
+	 */
+	function reconcile(): void {
 		const keep = new Set<number>();
-		for (let o = order - windowSize; o <= order + windowSize; o++) {
-			if (chapterByOrder.has(o)) keep.add(o);
+		for (const anchor of [audioAnchor, viewAnchor]) {
+			if (anchor === null) continue;
+			for (let o = anchor - windowSize; o <= anchor + windowSize; o++) {
+				if (chapterByOrder.has(o)) keep.add(o);
+			}
 		}
+		if (keep.size === 0) return;
 
-		for (const active of [...mounted.keys()]) {
-			if (!keep.has(active)) unmount(active);
-		}
-		for (const target of keep) mount(target);
+		const drop = [...mounted.keys()].filter((o) => !keep.has(o));
+		const add = [...keep].filter((o) => !mounted.has(o)).sort((a, b) => a - b);
+		if (drop.length === 0 && add.length === 0) return;
+
+		withScrollAnchor((vertical) => {
+			for (const order of drop) unmount(order, vertical);
+			for (const order of add) mount(order, vertical);
+			applyPlaceholders(vertical);
+		});
 	}
+
+	function setViewAnchor(order: number): void {
+		if (order === viewAnchor) return;
+		viewAnchor = order;
+		reconcile();
+		opts.onViewChapter?.(order);
+	}
+
+	/**
+	 * Tracks which chapters are on screen so windowing follows the reader.
+	 * Absent in jsdom, where nothing is laid out and the audio anchor is the
+	 * only one that can mean anything.
+	 */
+	const onScreen = new Set<number>();
+	let viewObserver: IntersectionObserver | null = null;
+	if (typeof IntersectionObserver === 'function') {
+		viewObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const order = Number((entry.target as HTMLElement).dataset.chapter);
+					if (Number.isNaN(order)) continue;
+					if (entry.isIntersecting) onScreen.add(order);
+					else onScreen.delete(order);
+				}
+				if (onScreen.size === 0) return;
+				// The earliest chapter on screen is the one being read: reading
+				// runs out of a chapter before the next one comes into view.
+				setViewAnchor(Math.min(...onScreen));
+			},
+			{ root: scroller, threshold: 0 }
+		);
+		for (const host of hosts.values()) viewObserver.observe(host);
+	}
+
+	// Before anything is mounted the book still has to be scrollable end to
+	// end, or there is nowhere to scroll to in order to mount it.
+	applyPlaceholders(isVertical());
 
 	return {
 		ensureVisible(sentenceId: number) {
 			const order = sentenceChapter.get(sentenceId);
 			if (order === undefined) return;
-			if (!mounted.has(order)) ensureChapter(order);
+			if (order === audioAnchor && mounted.has(order)) return;
+			audioAnchor = order;
+			reconcile();
+		},
+		chapterOf(sentenceId: number) {
+			return sentenceChapter.get(sentenceId);
+		},
+		viewChapter() {
+			return viewAnchor;
+		},
+		clearAudioAnchor() {
+			if (audioAnchor === null) return;
+			audioAnchor = null;
+			reconcile();
+		},
+		scrollToChapter(order: number) {
+			const host = hosts.get(order);
+			if (!host) return;
+			setViewAnchor(order);
+			if (!scroller) return;
+			const vertical = isVertical();
+			const style = getComputedStyle(scroller);
+			// The scroller's own padding clears the floating header, so landing
+			// the chapter at the padding edge rather than the border edge keeps
+			// its first line out from under the chrome.
+			const pad = parseFloat(vertical ? style.paddingRight : style.paddingTop) || 0;
+			const target = nearEdge(scroller.getBoundingClientRect(), vertical) + pad;
+			const delta = nearEdge(host.getBoundingClientRect(), vertical) - target;
+			scroller.scrollBy({
+				top: vertical ? 0 : delta,
+				left: vertical ? -delta : 0,
+				behavior: 'auto'
+			});
 		},
 		spansFor(sentenceId: number) {
 			const order = sentenceChapter.get(sentenceId);
@@ -251,20 +509,23 @@ export function renderEpub(
 			return this.spansFor(sentenceId)[0];
 		},
 		mountAll() {
-			for (const order of orders) mount(order);
+			const vertical = isVertical();
+			for (const order of orders) mount(order, vertical);
 		},
 		invalidateLayout() {
-			blockSizes.clear();
-			// Collapse the placeholders too: a stale extent on the new axis is
-			// worse than none, and they are re-measured on the next unmount.
-			for (const [order, host] of hosts) {
-				if (mounted.has(order)) continue;
-				host.style.minHeight = '';
-				host.style.minWidth = '';
-			}
+			measured.clear();
+			withScrollAnchor((vertical) => {
+				// Re-measure what is on screen first: those measurements are what
+				// every remaining estimate is calibrated from, and the old ones
+				// were taken under a layout that no longer applies.
+				for (const [order, record] of mounted) measure(order, record.el, vertical);
+				applyPlaceholders(vertical);
+			});
 		},
 		destroy() {
-			for (const order of [...mounted.keys()]) unmount(order);
+			viewObserver?.disconnect();
+			const vertical = isVertical();
+			for (const order of [...mounted.keys()]) unmount(order, vertical);
 			container.replaceChildren();
 		}
 	};
