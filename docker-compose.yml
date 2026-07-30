@@ -1,16 +1,38 @@
 services:
   reader:
-    build: .
+    image: ghcr.io/lambob01/read-along:latest
+    container_name: reader
+    restart: unless-stopped
     ports:
       - '80:80'
       - '443:443'
     environment:
       - SITE_DOMAIN=${SITE_DOMAIN:-reader.localhost}
-      - ABS_ORIGIN=${ABS_ORIGIN:-http://localhost:13378}
+      - ABS_ORIGIN=${ABS_ORIGIN:-http://audiobookshelf:80}
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - default
+      - abs
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: watchtower
     restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_CLEANUP=true
+
+networks:
+  abs:
+    external: true
+    name: ${ABS_NETWORK:-audiobookshelf_default}
 
 volumes:
   caddy_data:
