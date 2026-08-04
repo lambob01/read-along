@@ -18,6 +18,7 @@
 	} from '$lib/stores/settings';
 	import { ankiVersion, deckNames, modelNames, modelFieldNames } from '$lib/anki/connect';
 	import { ankiTarget } from '$lib/anki/mine';
+	import { PROGRESS_MODES, type ProgressMode } from '$lib/reader/progress';
 
 	interface Props {
 		/**
@@ -189,6 +190,27 @@
 		if (style === 'background') return 'Background and text';
 		if (style === 'underline') return 'Colour of the underline';
 		return 'Colour the active text takes';
+	}
+
+	const progressModeOptions: { value: ProgressMode; label: string; hint: string }[] = [
+		{
+			value: 'chapter-pct',
+			label: 'Chapter percentage',
+			hint: 'How far through the current chapter'
+		},
+		{ value: 'book-pct', label: 'Book percentage', hint: 'How far through the whole book' },
+		{
+			value: 'chapter-left',
+			label: 'Time left in chapter',
+			hint: 'How long until the chapter ends'
+		}
+	];
+
+	function toggleProgressMode(mode: ProgressMode) {
+		const on = $settings.progressModes;
+		patch(() => ({
+			progressModes: on.includes(mode) ? on.filter((m) => m !== mode) : [...on, mode]
+		}));
 	}
 </script>
 
@@ -470,6 +492,35 @@
 			The reader scrolls sideways, starting at the right edge. Reading width becomes the height of
 			each column.
 		</p>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Mirror progress bars', 'Fill right to left, matching tategaki')}
+			<input
+				type="checkbox"
+				checked={$settings.reverseProgressVertical}
+				onchange={(e) => patch(() => ({ reverseProgressVertical: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+		<p class="-mt-3 text-xs text-[var(--muted)]">
+			In vertical mode, the top progress bar and the seek bar fill from the right. No effect while
+			reading horizontally.
+		</p>
+
+		<label class="flex items-center justify-between gap-4">
+			{@render row('Swap back / forward', 'Arrows follow the reading direction')}
+			<input
+				type="checkbox"
+				checked={$settings.mirrorControlsVertical}
+				onchange={(e) => patch(() => ({ mirrorControlsVertical: e.currentTarget.checked }))}
+				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+			/>
+		</label>
+		<p class="-mt-3 text-xs text-[var(--muted)]">
+			In vertical mode the buttons look the same, but the arrow pointing along the reading direction
+			moves forward: right-to-left reading, so left is next. Arrow keys follow. No effect while
+			reading horizontally.
+		</p>
 	{/if}
 
 	{#if visible === 'reading'}
@@ -577,6 +628,25 @@
 				class="h-5 w-5 shrink-0 accent-[var(--accent)]"
 			/>
 		</label>
+
+		<div class="border-t border-[var(--border)] pt-5">
+			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Progress bar</span>
+			{#each progressModeOptions as p}
+				<label class="flex items-center justify-between gap-4 py-1">
+					{@render row(p.label, p.hint)}
+					<input
+						type="checkbox"
+						checked={$settings.progressModes.includes(p.value)}
+						onchange={() => toggleProgressMode(p.value)}
+						class="h-5 w-5 shrink-0 accent-[var(--accent)]"
+					/>
+				</label>
+			{/each}
+			<p class="mt-2 text-xs text-[var(--muted)]">
+				Tapping the progress bar cycles between the ones you keep on. Chapter modes only appear for
+				books with chapter metadata.
+			</p>
+		</div>
 
 		<div class="border-t border-[var(--border)] pt-5">
 			<span class="mb-2 block text-sm font-medium text-[var(--fg)]">Arrow keys</span>

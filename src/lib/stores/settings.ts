@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import { DEFAULT_ANKI_URL } from '$lib/anki/connect';
+import type { ProgressMode } from '$lib/reader/progress';
 
 export const themeOptions = [
 	{ value: 'light', label: 'Light' },
@@ -123,6 +124,23 @@ export interface SettingsState {
 	 * because it is a way of reading, not a property of a title.
 	 */
 	readAlong: boolean;
+	/**
+	 * Which readouts the progress bar cycles through when tapped. Chapter
+	 * modes only take part when the book has chapter metadata.
+	 */
+	progressModes: ProgressMode[];
+	/**
+	 * Fill the progress bars right to left under vertical text, which reads
+	 * right to left. Off, they keep filling left to right in both modes.
+	 */
+	reverseProgressVertical: boolean;
+	/**
+	 * Make the transport follow the reading direction under vertical text: the
+	 * buttons look the same, but the arrow pointing along the way the text
+	 * advances (left) moves forward. Off, back and forward stay as in
+	 * horizontal mode.
+	 */
+	mirrorControlsVertical: boolean;
 	/** Global fallback for per-book sync offset, in seconds. */
 	timingOffset: number;
 	gapThreshold: number;
@@ -200,6 +218,9 @@ export const defaultSettings: SettingsState = {
 	smoothScroll: true,
 	autoHideChrome: true,
 	readAlong: true,
+	progressModes: ['chapter-pct', 'book-pct', 'chapter-left'],
+	reverseProgressVertical: true,
+	mirrorControlsVertical: true,
 	timingOffset: 0,
 	gapThreshold: 1.2,
 	showNonSpeech: false,

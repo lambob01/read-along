@@ -21,6 +21,12 @@
 	import { createAutoScroller, type AutoScroller } from '$lib/sync/autoscroll';
 	import { renderParagraphs } from '$lib/reader/renderer';
 	import { renderEpub, type EpubRenderHandle } from '$lib/reader/epubRenderer';
+	import {
+		chapterProgress,
+		formatRemaining,
+		nextProgressMode,
+		type ProgressMode
+	} from '$lib/reader/progress';
 	import { loadTextSource, type TextSourceMode } from '$lib/epub/source';
 	import { createHighlighter, type HighlightHandle } from '$lib/reader/highlight';
 	import { primeCapture, releaseCapture } from '$lib/anki/capture';
@@ -768,14 +774,6 @@
 		return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
 	}
 
-	function formatRemaining(s: number): string {
-		if (!Number.isFinite(s) || s <= 0) return '';
-		const h = Math.floor(s / 3600);
-		const m = Math.round((s % 3600) / 60);
-		if (h > 0) return `${h}h ${m}m left`;
-		return `${m}m left`;
-	}
-
 	function formatOffset(v: number): string {
 		return `${v > 0 ? '+' : ''}${v.toFixed(2)}s`;
 	}
@@ -793,11 +791,66 @@
 	const seekPercent = $derived(
 		$player.duration > 0 ? ($player.currentTime / $player.duration) * 100 : 0
 	);
+	/**
+	 * The progress strip's readout, cycled by tapping it: percentage of the
+	 * chapter, percentage of the book, or time left in the chapter. Which
+	 * readouts the cycle visits is set under Settings; chapter modes need
+	 * chapter metadata, which some books lack.
+	 */
+	let progressMode = $state<ProgressMode>('book-pct');
 
-	const remainingLabel = $derived(
-		$player.duration > 0 ? formatRemaining($player.duration - $player.currentTime) : ''
+	const chProgress = $derived(
+		chapters.length > 0 ? chapterProgress(chapters, $player.currentTime, $player.duration) : null
 	);
 
+	/** The enabled modes this book can actually show. */
+	const availableModes = $derived(
+		$settings.progressModes.filter((m) => m === 'book-pct' || chProgress)
+	);
+	const effectiveProgressMode = $derived(
+		availableModes.includes(progressMode) ? progressMode : (availableModes[0] ?? 'book-pct')
+	);
+
+	/** Fill width. Always the whole book: the mode only changes the readout,
+	 *  never what the bar means. */
+	const progressPercent = $derived(seekPercent);
+
+	/** Bars mirror the reading direction: right to left under vertical text. */
+	const progressRTL = $derived($settings.verticalText && $settings.reverseProgressVertical);
+
+	/**
+	 * The transport actions follow the reading direction: under vertical text,
+	 * an arrow pointing along the way text advances (left) moves forward.
+	 */
+	const swapTransport = $derived($settings.verticalText && $settings.mirrorControlsVertical);
+
+	/** Chapter starts as a fraction of the book, for the strip's tick marks. */
+	const chapterMarkers = $derived(
+		$player.duration > 0
+			? chapters.map((c) => Math.min(100, (c.start / $player.duration) * 100))
+			: []
+	);
+
+	const progressLabel = $derived.by(() => {
+		if (effectiveProgressMode === 'book-pct' || !chProgress) {
+			return `${Math.round(seekPercent)}%`;
+		}
+		// 1-based, and the chapter before the first one starts at is still "1".
+		const ch = Math.max(0, chProgress.index) + 1;
+		if (effectiveProgressMode === 'chapter-pct') {
+			return `Ch ${ch} · ${Math.round(chProgress.percent)}%`;
+		}
+		return `Ch ${ch} · ${formatRemaining(chProgress.remaining) || '0m left'}`;
+	});
+
+	const progressTitleLabel = $derived.by(() => {
+		if (effectiveProgressMode === 'book-pct' || !chProgress) return '';
+		return chapters[Math.max(0, chProgress.index)]?.title || '';
+	});
+
+	function cycleProgressMode() {
+		progressMode = nextProgressMode(progressMode, availableModes);
+	}
 	function goToNextChapter() {
 		if (chapters.length === 0) return;
 		const next = chapters.findIndex((c) => c.start > $player.currentTime);
@@ -1022,12 +1075,16 @@
 				break;
 			case 'ArrowLeft':
 				e.preventDefault();
-				if (stepsLines) stepCue(-1);
+				// Under vertical text the reading direction runs right to left,
+				// so the left arrow advances, matching the on-screen buttons.
+				if (stepsLines) stepCue(swapTransport ? 1 : -1);
+				else if (swapTransport) player.skipForward($settings.seekStep);
 				else player.skipBack($settings.seekStep);
 				break;
 			case 'ArrowRight':
 				e.preventDefault();
-				if (stepsLines) stepCue(1);
+				if (stepsLines) stepCue(swapTransport ? -1 : 1);
+				else if (swapTransport) player.skipBack($settings.seekStep);
 				else player.skipForward($settings.seekStep);
 				break;
 			case 'Enter':
@@ -1110,9 +1167,11 @@
 	</div>
 {:else}
 	<div class="relative flex h-dvh flex-col overflow-hidden bg-[var(--bg)]">
-		<!-- Top bar -->
+		<!-- Top bar. In flow rather than floating so the progress strip below it
+		     is always visible; hiding it only translates it away and never
+		     reflows the text, so the reading position survives. -->
 		<div
-			class="absolute inset-x-0 top-0 z-30 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)]/90 px-3 py-2 backdrop-blur transition-transform duration-200 {chromeVisible
+			class="relative z-30 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)]/90 px-3 py-2 backdrop-blur transition-transform duration-200 {chromeVisible
 				? 'translate-y-0'
 				: '-translate-y-full'}"
 		>
@@ -1426,6 +1485,40 @@
 			</button>
 		</div>
 
+		<!-- Progress strip: chapter/whole-book readout with chapter markers.
+		     Always visible (unlike the rest of the chrome); tapping the readout
+		     cycles through the modes enabled in settings. -->
+		{#if readAlong}
+			<div class="relative z-20 border-b border-[var(--border)] bg-[var(--bg)]/90">
+				<button
+					onclick={cycleProgressMode}
+					disabled={availableModes.length < 2}
+					class="flex w-full items-center justify-between gap-2 px-3 pt-1 pb-0.5 text-[11px] text-[var(--muted)] tabular-nums"
+					aria-label="Progress: {progressLabel}. Tap to switch"
+					title="Tap to switch: chapter %, book %, time left in chapter"
+				>
+					<span>{progressLabel}</span>
+					{#if progressTitleLabel}
+						<span class="truncate text-right">{progressTitleLabel}</span>
+					{/if}
+				</button>
+				<div class="relative h-1.5 w-full bg-[var(--border)]">
+					<div
+						class="absolute top-[1.5px] h-[3px] bg-[var(--accent)] {progressRTL
+							? 'right-0'
+							: 'left-0'}"
+						style="width: {progressPercent}%"
+					></div>
+					{#each chapterMarkers as pct}
+						<div
+							class="absolute top-0 h-1.5 w-px bg-[var(--fg)]/35"
+							style="{progressRTL ? 'right' : 'left'}: {pct}%"
+						></div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+
 		<!-- Reader area. Fills the frame; chrome floats above it so hiding the
 		     chrome does not reflow the text and lose the reading position. -->
 		<div
@@ -1473,22 +1566,22 @@
 			{/if}
 		</div>
 
-		<!-- Slim progress line, the only chrome that survives immersive mode.
-		     It reports the audio, so it goes with the rest of the transport. -->
+		<!-- Tiny progress readout at the very bottom right. Tapping it cycles
+		     through the modes enabled in settings. When the chrome is up it
+		     floats just above the player bar; immersive mode parks it at the
+		     edge. -->
 		{#if readAlong}
-			<div class="pointer-events-none absolute inset-x-0 bottom-0 z-20">
-				<div
-					class="flex items-center justify-between px-3 pb-1 text-[11px] text-[var(--muted)] tabular-nums transition-opacity duration-200 {chromeVisible
-						? 'opacity-0'
-						: 'opacity-100'}"
-				>
-					<span>{Math.round(seekPercent)}%</span>
-					<span>{remainingLabel}</span>
-				</div>
-				<div class="h-0.5 w-full bg-[var(--border)]">
-					<div class="h-full bg-[var(--accent)]" style="width: {seekPercent}%"></div>
-				</div>
-			</div>
+			<button
+				onclick={cycleProgressMode}
+				disabled={availableModes.length < 2}
+				class="absolute right-3 z-20 text-[11px] text-[var(--muted)] tabular-nums transition-[bottom] duration-200 disabled:opacity-50 {chromeVisible
+					? 'bottom-28'
+					: 'bottom-2'}"
+				aria-label="Progress: {progressLabel}. Tap to switch"
+				title="Tap to switch: chapter %, book %, time left in chapter"
+			>
+				{progressLabel}
+			</button>
 		{/if}
 
 		<!-- Player bar -->
@@ -1512,8 +1605,12 @@
 							max={$player.duration || 0}
 							value={$player.currentTime}
 							oninput={handleSeek}
-							style="background: linear-gradient(to right, var(--accent) 0%, var(--accent) {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
-							class="h-3 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
+							style="background: linear-gradient(to {progressRTL
+								? 'left'
+								: 'right'}, var(--accent) 0%, var(--accent) {seekPercent}%, var(--border) {seekPercent}%, var(--border) 100%)"
+							class="h-3 flex-1 cursor-pointer appearance-none rounded-full {progressRTL
+								? '[direction:rtl]'
+								: '[direction:ltr]'} [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:shadow-md"
 							aria-label="Seek"
 						/>
 						<span class="min-w-[48px] text-xs text-[var(--muted)] tabular-nums sm:min-w-[52px]">
@@ -1523,12 +1620,14 @@
 
 					<!-- Controls row -->
 					<div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-						<!-- Transport buttons -->
+						<!-- Transport buttons. Identical in both modes; only the
+						     actions swap under vertical text, so the arrow pointing
+						     along the reading direction moves forward. -->
 						<div class="flex items-center justify-center gap-0.5 sm:gap-1">
 							<button
-								onclick={goToPrevChapter}
+								onclick={swapTransport ? goToNextChapter : goToPrevChapter}
 								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-								aria-label="Previous chapter"
+								aria-label={swapTransport ? 'Next chapter' : 'Previous chapter'}
 							>
 								<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
 									<path d="M16.67 0l2.83 2.829-9.339 9.175 9.339 9.167-2.83 2.829-12.17-11.996z" />
@@ -1536,9 +1635,9 @@
 							</button>
 
 							<button
-								onclick={() => player.skipBack(10)}
+								onclick={() => (swapTransport ? player.skipForward(10) : player.skipBack(10))}
 								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-								aria-label="Skip back 10s"
+								aria-label={swapTransport ? 'Skip forward 10s' : 'Skip back 10s'}
 							>
 								<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path
@@ -1567,9 +1666,9 @@
 							</button>
 
 							<button
-								onclick={() => player.skipForward(10)}
+								onclick={() => (swapTransport ? player.skipBack(10) : player.skipForward(10))}
 								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-								aria-label="Skip forward 10s"
+								aria-label={swapTransport ? 'Skip back 10s' : 'Skip forward 10s'}
 							>
 								<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path
@@ -1582,9 +1681,9 @@
 							</button>
 
 							<button
-								onclick={goToNextChapter}
+								onclick={swapTransport ? goToPrevChapter : goToNextChapter}
 								class="flex min-h-[42px] min-w-[42px] items-center justify-center rounded p-2 text-[var(--fg)] hover:bg-[var(--border)] sm:min-h-[44px] sm:min-w-[44px]"
-								aria-label="Next chapter"
+								aria-label={swapTransport ? 'Previous chapter' : 'Next chapter'}
 							>
 								<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
 									<path d="M7.33 24l-2.83-2.829 9.339-9.175-9.339-9.167 2.83-2.829 12.17 11.996z" />

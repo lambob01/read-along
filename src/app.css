@@ -218,9 +218,9 @@ body {
 		reflow read as a jump. One mechanism, ours, everywhere.
 	*/
 	overflow-anchor: none;
-	/* Top and bottom clear the floating header and player bar, which stay put
-	   whichever way the text runs. */
-	padding: 4rem var(--theme-side-margins) 7rem;
+	/* Top clears the progress strip; bottom clears the player bar, which
+	   stays put whichever way the text runs. */
+	padding: 1.5rem var(--theme-side-margins) 7rem;
 }
 
 /*
