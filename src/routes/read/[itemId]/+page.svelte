@@ -410,6 +410,19 @@
 		}
 	}
 
+	/**
+	 * Links inside the book point at files of the EPUB, not at pages of this
+	 * app. Fragment links scroll within the page and are left alone; anything
+	 * else would route to the reader with a chapter filename as the item id.
+	 */
+	function handleContentLinkClick(e: MouseEvent) {
+		const el = e.target as HTMLElement | null;
+		const a = el?.closest?.('a');
+		if (!a) return;
+		const href = a.getAttribute('href');
+		if (href && !href.startsWith('#')) e.preventDefault();
+	}
+
 	onMount(async () => {
 		if (!connectionToken) {
 			await goto('/');
@@ -420,6 +433,10 @@
 		// contentEl is not bound yet, so it is resolved lazily on each call.
 		highlighter = createHighlighter({ getRoot: () => contentEl ?? document });
 		window.addEventListener('keydown', handleKeyDown);
+		// The book's own links point at files inside the EPUB, not at pages of
+		// this app; without this, clicking one (a table of contents, a footnote)
+		// routes here with a chapter filename as the item id and the page dies.
+		scrollerEl?.addEventListener('click', handleContentLinkClick);
 
 		const restart = $page.url.searchParams.get('restart') === '1';
 
@@ -647,7 +664,12 @@
 	}
 
 	onDestroy(() => {
-		if ($player.currentTime > 0) {
+		// Only a page that actually loaded its item may record a position. The
+		// audio element is a singleton that keeps playing whatever the previous
+		// book had, so a failed page (a link inside the EPUB routed here with a
+		// chapter filename as the item id) would otherwise write a bookmark and
+		// a "Continue Listening" entry under that bogus id.
+		if ($player.currentTime > 0 && $reader.item?.id === itemId) {
 			player.saveBookmark(itemId, $player.currentTime);
 			recent.record({
 				itemId,
@@ -664,6 +686,7 @@
 		// singleton audio element, and createMediaElementSource cannot be
 		// re-run on an element that already has one.
 		window.removeEventListener('keydown', handleKeyDown);
+		scrollerEl?.removeEventListener('click', handleContentLinkClick);
 		// The audio element is a singleton that outlives this page, so the
 		// controllers' listeners have to come off with it.
 		player.getAudioElement()?.removeEventListener('seeked', handleAudioSeeked);
