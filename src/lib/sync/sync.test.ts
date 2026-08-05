@@ -310,3 +310,27 @@ describe('buildIndex', () => {
 		expect(index.sentences[1].text).toBe('B.');
 	});
 });
+
+describe('parseCues line endings', () => {
+	const srt = `1\r\n00:00:01,000 --> 00:00:02,500\r\nHello world\r\n\r\n2\r\n00:00:03,000 --> 00:00:05,000\r\nHow are you?`;
+
+	it('parses CRLF SRT files as multiple cues', () => {
+		const cues = parseCues(srt);
+		expect(cues).toHaveLength(2);
+		expect(cues[0].text).toBe('Hello world');
+		expect(cues[1].text).toBe('How are you?');
+	});
+
+	it('parses CRLF VTT files as multiple cues', () => {
+		const vtt = `WEBVTT\r\n\r\n00:00:01.000 --> 00:00:02.500\r\nFirst cue\r\n\r\n00:00:03.000 --> 00:00:05.000\r\nSecond cue`;
+		const cues = parseCues(vtt);
+		expect(cues).toHaveLength(2);
+		expect(cues[0].text).toBe('First cue');
+		expect(cues[1].text).toBe('Second cue');
+	});
+
+	it('strips a leading BOM before sniffing the format', () => {
+		const cues = parseCues(`\uFEFF${srt}`);
+		expect(cues).toHaveLength(2);
+	});
+});

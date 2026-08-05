@@ -104,8 +104,13 @@ export function parseVTT(raw: string): RawCue[] {
 }
 
 export function parseCues(raw: string): RawCue[] {
-	if (WEBVTT_HEADER.test(raw.trimStart())) {
-		return parseVTT(raw);
+	// Subtitle tools on Windows write \r\n; the SRT regex and VTT splits both
+	// need \n\n to separate cues, and a CRLF file contains none — it parsed
+	// as one cue holding the whole file. A BOM likewise breaks the WEBVTT
+	// sniff. Normalize once, here, so both parsers see a canonical form.
+	const normalized = raw.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '');
+	if (WEBVTT_HEADER.test(normalized.trimStart())) {
+		return parseVTT(normalized);
 	}
-	return parseSRT(raw);
+	return parseSRT(normalized);
 }
