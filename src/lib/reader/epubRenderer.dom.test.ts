@@ -9,7 +9,12 @@ function makeDoc(chapters: string[]): EpubDoc {
 		author: 'A',
 		language: 'ja',
 		chapters: chapters.map((html, i) => {
-			const doc = new DOMParser().parseFromString(`<html><body>${html}</body></html>`, 'text/html');
+			const doc = new DOMParser().parseFromString(
+				`<html xmlns="http://www.w3.org/1999/xhtml"><body>${html}</body></html>`,
+				// Chapters parse as XML in the real pipeline (epub/parse.ts),
+				// where attribute names and tag names keep their case.
+				'application/xhtml+xml'
+			);
 			return {
 				id: `ch${i}`,
 				order: i,
@@ -319,7 +324,7 @@ describe('renderEpub', () => {
 describe('cloneForRender sanitization', () => {
 	it('strips event handler attributes from cloned content', () => {
 		const { container, handle, index } = setup(
-			['<p onclick="window.pwned = 1">朝が来た。</p>'],
+			['<p onclick="window.pwned = 1" ONCLICK="window.pwned = 2">朝が来た。</p>'],
 			[['朝が来た。', 0, 2]]
 		);
 		// Nothing is mounted until a chapter is anchored.
@@ -328,6 +333,12 @@ describe('cloneForRender sanitization', () => {
 		// The block element itself is the cloned <p>, carrying the class.
 		container.querySelectorAll('.reader-block').forEach((p) => {
 			expect(p.hasAttribute('onclick')).toBe(false);
+			// XML preserves attribute case, and browsers match event handler
+			// attributes case-insensitively, so uppercase spellings must go
+			// too. jsdom cannot find case-preserved names via hasAttribute
+			// once the element is adopted into an HTML document, so inspect
+			// the stored names directly.
+			expect(p.getAttributeNames()).not.toContain('ONCLICK');
 		});
 	});
 

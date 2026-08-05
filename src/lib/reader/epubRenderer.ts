@@ -11,17 +11,17 @@ const DROP_CODE_ATTRS = ['srcdoc', 'src', 'srcset', 'formaction', 'data', 'poste
  * app's origin, where the ABS token lives.
  */
 const DROP_ELEMENTS = new Set([
-	'SCRIPT',
-	'IFRAME',
-	'OBJECT',
-	'EMBED',
-	'VIDEO',
-	'AUDIO',
-	'FORM',
-	'LINK',
-	'STYLE',
-	'BASE',
-	'META'
+	'script',
+	'iframe',
+	'object',
+	'embed',
+	'video',
+	'audio',
+	'form',
+	'link',
+	'style',
+	'base',
+	'meta'
 ]);
 
 /**
@@ -38,16 +38,21 @@ function cloneForRender(el: Element): HTMLElement {
 	for (const node of all) {
 		for (const attr of DROP_ATTRS) node.removeAttribute(attr);
 		// Snapshot the attributes: removing them while iterating is fine, but
-		// `attributes` is live.
+		// `attributes` is live. Chapters parse as XML, where attribute names
+		// keep their case, and browsers match event handler attributes ASCII
+		// case-insensitively — so compare the lowercased name.
 		for (const attr of Array.from(node.attributes)) {
-			if (attr.name.startsWith('on') || DROP_CODE_ATTRS.includes(attr.name)) {
+			const name = attr.name.toLowerCase();
+			if (name.startsWith('on') || DROP_CODE_ATTRS.includes(name)) {
 				node.removeAttribute(attr.name);
 			}
 		}
 		// Images inside an EPUB reference zip-internal paths that will not
-		// resolve; drop them rather than render broken placeholders.
-		if (node.tagName === 'IMG' || node.tagName === 'SVG') node.remove();
-		if (DROP_ELEMENTS.has(node.tagName)) node.remove();
+		// resolve; drop them rather than render broken placeholders. Tag
+		// names keep their source case under XML, like attribute names.
+		const tag = node.tagName.toLowerCase();
+		if (tag === 'img' || tag === 'svg') node.remove();
+		if (DROP_ELEMENTS.has(tag)) node.remove();
 	}
 	return clone;
 }
