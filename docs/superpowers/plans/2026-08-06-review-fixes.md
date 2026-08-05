@@ -131,8 +131,11 @@ describe('cloneForRender sanitization', () => {
 			// `ONCLICK` exercises the case-insensitive strip: XHTML keeps
 			// attribute case, and browsers treat event-handler attributes as
 			// case-insensitive, so an uppercase variant would still compile.
-			expect(p.hasAttribute('onclick')).toBe(false);
-			expect(p.hasAttribute('ONCLICK')).toBe(false);
+			// Assert via `getAttributeNames()` — jsdom's `hasAttribute` cannot
+			// find case-preserved names on elements adopted from a parsed XML
+			// document.
+			expect(p.getAttributeNames()).not.toContain('onclick');
+			expect(p.getAttributeNames()).not.toContain('ONCLICK');
 		});
 	});
 
