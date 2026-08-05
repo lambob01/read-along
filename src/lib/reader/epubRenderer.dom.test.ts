@@ -315,3 +315,45 @@ describe('renderEpub', () => {
 		expect(container.children.length).toBe(0);
 	});
 });
+
+describe('cloneForRender sanitization', () => {
+	it('strips event handler attributes from cloned content', () => {
+		const { container, handle, index } = setup(
+			['<p onclick="window.pwned = 1">朝が来た。</p>'],
+			[['朝が来た。', 0, 2]]
+		);
+		// Nothing is mounted until a chapter is anchored.
+		handle.ensureVisible(index.sentences[0].id);
+
+		// The block element itself is the cloned <p>, carrying the class.
+		container.querySelectorAll('.reader-block').forEach((p) => {
+			expect(p.hasAttribute('onclick')).toBe(false);
+		});
+	});
+
+	it('drops script, iframe and other executable elements', () => {
+		const { container, handle, index } = setup(
+			[
+				'<p>朝が来た。<script>window.pwned = 1</script><iframe src="https://evil.example"></iframe><form action="https://evil.example"></form></p>'
+			],
+			[['朝が来た。', 0, 2]]
+		);
+		handle.ensureVisible(index.sentences[0].id);
+
+		expect(container.querySelector('script')).toBeNull();
+		expect(container.querySelector('iframe')).toBeNull();
+		expect(container.querySelector('form')).toBeNull();
+	});
+
+	it('strips srcdoc and src attributes', () => {
+		const { container, handle, index } = setup(
+			['<p>朝が来た。<video src="https://evil.example"></video></p>'],
+			[['朝が来た。', 0, 2]]
+		);
+		handle.ensureVisible(index.sentences[0].id);
+
+		// The <video> itself is dropped as an executable element, and nothing
+		// else in the block may carry a code-capable attribute.
+		expect(container.querySelectorAll('.reader-block [src]').length).toBe(0);
+	});
+});

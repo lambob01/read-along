@@ -3,20 +3,51 @@ import { collectProseTextNodes, resolvePath } from '$lib/epub/text';
 
 /** Attributes stripped from cloned EPUB nodes. */
 const DROP_ATTRS = ['style', 'class', 'id', 'width', 'height', 'align'];
+/** Attributes that can smuggle code into the document. */
+const DROP_CODE_ATTRS = ['srcdoc', 'src', 'srcset', 'formaction', 'data', 'poster'];
+/**
+ * Elements whose presence in a book is executable or form-submitting. Books
+ * are downloaded from the web; an EPUB's own markup must not run in this
+ * app's origin, where the ABS token lives.
+ */
+const DROP_ELEMENTS = new Set([
+	'SCRIPT',
+	'IFRAME',
+	'OBJECT',
+	'EMBED',
+	'VIDEO',
+	'AUDIO',
+	'FORM',
+	'LINK',
+	'STYLE',
+	'BASE',
+	'META'
+]);
 
 /**
  * Clones an EPUB element for rendering, discarding publication styling so the
  * reader's own theme stays authoritative, while keeping semantic markup
  * (emphasis, ruby, headings) that the subtitle path used to throw away.
+ *
+ * The clone is also sanitized: inline event handlers and executable elements
+ * come from the book file, not from this app, and must not compile here.
  */
 function cloneForRender(el: Element): HTMLElement {
 	const clone = el.cloneNode(true) as HTMLElement;
 	const all: Element[] = [clone, ...Array.from(clone.querySelectorAll('*'))];
 	for (const node of all) {
 		for (const attr of DROP_ATTRS) node.removeAttribute(attr);
+		// Snapshot the attributes: removing them while iterating is fine, but
+		// `attributes` is live.
+		for (const attr of Array.from(node.attributes)) {
+			if (attr.name.startsWith('on') || DROP_CODE_ATTRS.includes(attr.name)) {
+				node.removeAttribute(attr.name);
+			}
+		}
 		// Images inside an EPUB reference zip-internal paths that will not
 		// resolve; drop them rather than render broken placeholders.
 		if (node.tagName === 'IMG' || node.tagName === 'SVG') node.remove();
+		if (DROP_ELEMENTS.has(node.tagName)) node.remove();
 	}
 	return clone;
 }
