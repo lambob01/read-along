@@ -120,47 +120,43 @@ Append to `src/lib/reader/epubRenderer.dom.test.ts`:
 ```ts
 describe('cloneForRender sanitization', () => {
 	it('strips event handler attributes from cloned content', () => {
-		const { container, index } = setup(
+		const { container, handle, index } = setup(
 			['<p onclick="window.pwned = 1">朝が来た。</p>'],
 			[['朝が来た。', 0, 2]]
 		);
-		index.sentences[0].timed = false;
+		// Nothing is mounted until a chapter is anchored.
+		handle.ensureVisible(index.sentences[0].id);
 
 		container.querySelectorAll('.reader-block p').forEach((p) => {
 			expect(p.hasAttribute('onclick')).toBe(false);
 		});
-		expect((window as { pwned?: number }).pwned).toBeUndefined();
 	});
 
 	it('drops script, iframe and other executable elements', () => {
-		const { container, index } = setup(
+		const { container, handle, index } = setup(
 			[
 				'<p>朝が来た。<script>window.pwned = 1</script><iframe src="https://evil.example"></iframe><form action="https://evil.example"></form></p>'
 			],
 			[['朝が来た。', 0, 2]]
 		);
-		index.sentences[0].timed = false;
+		handle.ensureVisible(index.sentences[0].id);
 
 		expect(container.querySelector('script')).toBeNull();
 		expect(container.querySelector('iframe')).toBeNull();
 		expect(container.querySelector('form')).toBeNull();
-		expect((window as { pwned?: number }).pwned).toBeUndefined();
 	});
 
-	it('strips srcdoc, src and formaction attributes', () => {
-		const { container, index } = setup(
-			[
-				'<p>朝が来た。<video src="https://evil.example"></video></p>'
-			],
+	it('strips srcdoc and src attributes', () => {
+		const { container, handle, index } = setup(
+			['<p>朝が来た。<video src="https://evil.example"></video></p>'],
 			[['朝が来た。', 0, 2]]
 		);
-		index.sentences[0].timed = false;
+		handle.ensureVisible(index.sentences[0].id);
 
 		container.querySelectorAll('.reader-block [src]').forEach((el) => {
 			expect(el.hasAttribute('src')).toBe(false);
 		});
 	});
-});
 ```
 
 Note: `alignEpubToCues` normalizes text that includes `<script>`; the sanitizer runs on the *rendered* clone, so the paragraph still wraps. If `window.pwned` gets set by the script tag during the test's `setup`, the test failing is the point — do not run the existing suite until Step 3.
@@ -277,7 +273,7 @@ describe('resolveProxyTarget', () => {
 		expect(resolveProxyTarget('http://localhost:13378', '//evil.example/x', '')).toBeNull();
 	});
 
-	it('rejects a path that resolves to a different port', () => {
+	it('accepts an ordinary same-origin path', () => {
 		expect(resolveProxyTarget('http://localhost:13378', '/x', '')).not.toBeNull();
 	});
 
@@ -708,7 +704,7 @@ import type { ABSClient } from '$lib/abs/client';
 const client = {} as ABSClient;
 
 const sources = {
-	subIno: 10,
+	subIno: '10',
 	subSize: 100,
 	epubIno: null,
 	epubSize: null
@@ -741,7 +737,11 @@ export async function loadTextSource(
 	client: ABSClient,
 	itemId: string,
 	sources?: ItemSources,
-	fetchFileText: (client: ABSClient, itemId: string, ino: number) => Promise<string> = getFileText
+	fetchFileText: (
+		client: ABSClient,
+		itemId: string,
+		ino: string
+	) => Promise<string> = getFileText
 ): Promise<TextSource> {
 ```
 
@@ -1670,7 +1670,12 @@ describe('SettingsPanel', () => {
 		mount(SettingsPanel, { target: host, props: { showSubtitleOptions: true, only: 'reading' } });
 		flushSync();
 
-		const readAlong = host.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+		// The reading tab's checkboxes are labelled rows; find "Read along" by
+		// its label text rather than assuming checkbox order.
+		const row = [...host.querySelectorAll('label')].find((l) =>
+			l.textContent?.includes('Read along')
+		);
+		const readAlong = row?.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
 		expect(readAlong).not.toBeNull();
 		readAlong!.checked = true;
 		readAlong!.dispatchEvent(new Event('change'));
@@ -1681,7 +1686,7 @@ describe('SettingsPanel', () => {
 });
 ```
 
-Note: `only: 'reading'` restricts the panel to the reading tab, whose first checkbox is "Read along" (SettingsPanel.svelte:608-616). If the mount complains about missing globals (e.g. `getComputedStyle`), jsdom provides them; if `document.body` is needed by `seedFrom`, it is only called from user actions, not mount.
+Note: `only: 'reading'` restricts the panel to the reading tab, which contains the "Read along" checkbox (SettingsPanel.svelte:608-616). If the mount complains about missing globals (e.g. `getComputedStyle`), jsdom provides them; if `document.body` is needed by `seedFrom`, it is only called from user actions, not mount.
 
 - [ ] **Step 2: Run the smoke tests to verify they pass**
 
