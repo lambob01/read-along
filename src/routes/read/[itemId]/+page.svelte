@@ -73,6 +73,56 @@
 	let chromeVisible = $state(true);
 	let chromeTimer: ReturnType<typeof setTimeout> | null = null;
 
+	/**
+	 * When the chrome hides, the top bar's layout space collapses so the
+	 * reader area rises right up under the progress strip — no dead band. The
+	 * scroll position is then compensated by the bar's height in lockstep, or
+	 * the text under the reader's finger would jump.
+	 */
+	let topBarEl = $state<HTMLDivElement>();
+	let topBarHeight = $state(0);
+
+	$effect(() => {
+		if (topBarEl) topBarHeight = topBarEl.offsetHeight;
+	});
+
+	let chromeScrollAnim: number | null = null;
+	/** The last value `chromeVisible` had; null until the first run, which
+	 *  must not compensate because nothing has moved yet. */
+	let lastChromeVisible: boolean | null = null;
+
+	/**
+	 * Moves the scroll position by `delta` over the same 200ms the top bar's
+	 * collapse takes, linearly, so the net visible text never shifts. Only the
+	 * reading axis can be corrected: under vertical text the shift is
+	 * perpendicular to it, so there the collapse relocates the view instead.
+	 */
+	function compensateChromeScroll(delta: number) {
+		const el = scrollerEl;
+		if (!el || delta === 0 || $settings.verticalText) return;
+		autoScroller?.noteProgrammaticScroll();
+		if (chromeScrollAnim !== null) cancelAnimationFrame(chromeScrollAnim);
+		const from = el.scrollTop;
+		const duration = 200;
+		const start = performance.now();
+		const step = () => {
+			const p = Math.min(1, (performance.now() - start) / duration);
+			el.scrollTop = from + delta * p;
+			chromeScrollAnim = p < 1 ? requestAnimationFrame(step) : null;
+		};
+		chromeScrollAnim = requestAnimationFrame(step);
+	}
+
+	$effect(() => {
+		const visible = chromeVisible;
+		if (visible === lastChromeVisible) return;
+		const wasSet = lastChromeVisible !== null;
+		lastChromeVisible = visible;
+		// Hiding shrinks the reader area from the top, so the content must be
+		// scrolled back down to keep the reading position; revealing reverses.
+		if (wasSet) compensateChromeScroll(visible ? topBarHeight : -topBarHeight);
+	});
+
 	type SleepOption = number | 'chapter';
 	const sleepPresets: { label: string; value: SleepOption | null }[] = [
 		{ label: 'Off', value: null },
@@ -1190,341 +1240,346 @@
 	</div>
 {:else}
 	<div class="relative flex h-dvh flex-col overflow-hidden bg-[var(--bg)]">
-		<!-- Top bar. In flow rather than floating so the progress strip below it
-		     is always visible; hiding it only translates it away and never
-		     reflows the text, so the reading position survives. -->
+		<!-- Top bar. In flow, and its height collapses when the chrome hides so
+		     the progress strip and reader rise up under it — the scroll
+		     compensation keeps the reading position fixed. The collapse is a
+		     grid row going 1fr→0fr, which animates height while clipping the
+		     bar's content. -->
 		<div
-			class="relative z-30 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)]/90 px-3 py-2 backdrop-blur transition-transform duration-200 {chromeVisible
-				? 'translate-y-0'
-				: '-translate-y-full'}"
+			bind:this={topBarEl}
+			class="relative z-30 grid transition-[grid-template-rows] duration-200 ease-linear {chromeVisible
+				? 'grid-rows-[1fr]'
+				: 'grid-rows-[0fr]'}"
 		>
-			<button
-				onclick={() => goto(`/book/${itemId}`)}
-				class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
-				aria-label="Back to book details"
-			>
-				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M15 19l-7-7 7-7"
-					/>
-				</svg>
-			</button>
+			<div class="min-h-0 overflow-hidden">
+				<div
+					class="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--bg)]/90 px-3 py-2 backdrop-blur"
+				>
+					<button
+						onclick={() => goto(`/book/${itemId}`)}
+						class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
+						aria-label="Back to book details"
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M15 19l-7-7 7-7"
+							/>
+						</svg>
+					</button>
 
-			<div class="min-w-0 flex-1">
-				<p class="truncate text-sm font-medium text-[var(--fg)]">
-					{$reader.item?.media?.metadata?.title || 'Untitled'}
-				</p>
-				<p class="truncate text-xs text-[var(--muted)]">
-					{$reader.item?.media?.metadata?.authorName || ''}
-					{#if currentChapter}&middot; {currentChapter}{/if}
-				</p>
-			</div>
+					<div class="min-w-0 flex-1">
+						<p class="truncate text-sm font-medium text-[var(--fg)]">
+							{$reader.item?.media?.metadata?.title || 'Untitled'}
+						</p>
+						<p class="truncate text-xs text-[var(--muted)]">
+							{$reader.item?.media?.metadata?.authorName || ''}
+							{#if currentChapter}&middot; {currentChapter}{/if}
+						</p>
+					</div>
 
-			<!-- Contents. The one control that moves the reader without moving
+					<!-- Contents. The one control that moves the reader without moving
 			     the audio, so it is the way out of a chapter the narration is
 			     not in. -->
-			{#if epubChapters.length > 0}
-				<div class="relative">
-					<button
-						onclick={() => (showToc = !showToc)}
-						class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
-						aria-label="Contents"
-						title="Contents"
-					>
-						<svg
-							class="h-5 w-5"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-							stroke-width="2"
-						>
-							<path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h10" />
-						</svg>
-					</button>
-					{#if showToc}
-						<button
-							class="fixed inset-0 z-40 cursor-default"
-							onclick={() => (showToc = false)}
-							aria-label="Close contents"
-						></button>
-						<div
-							class="absolute top-full right-0 z-50 mt-1 max-h-[70vh] w-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 shadow-[var(--shadow-lg)]"
-						>
-							{#each epubChapters as ch}
-								<button
-									onclick={() => jumpToEpubChapter(ch.order)}
-									class="block w-full px-3 py-2 text-left text-sm text-[var(--fg)] hover:bg-[var(--surface-hover)] {ch.order ===
-									viewChapterOrder
-										? 'bg-[var(--accent-soft)] font-medium text-[var(--accent)]'
-										: ''}"
+					{#if epubChapters.length > 0}
+						<div class="relative">
+							<button
+								onclick={() => (showToc = !showToc)}
+								class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
+								aria-label="Contents"
+								title="Contents"
+							>
+								<svg
+									class="h-5 w-5"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+									stroke-width="2"
 								>
-									{ch.title || `Chapter ${ch.order + 1}`}
-								</button>
-							{/each}
+									<path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h10" />
+								</svg>
+							</button>
+							{#if showToc}
+								<button
+									class="fixed inset-0 z-40 cursor-default"
+									onclick={() => (showToc = false)}
+									aria-label="Close contents"
+								></button>
+								<div
+									class="absolute top-full right-0 z-50 mt-1 max-h-[70vh] w-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 shadow-[var(--shadow-lg)]"
+								>
+									{#each epubChapters as ch}
+										<button
+											onclick={() => jumpToEpubChapter(ch.order)}
+											class="block w-full px-3 py-2 text-left text-sm text-[var(--fg)] hover:bg-[var(--surface-hover)] {ch.order ===
+											viewChapterOrder
+												? 'bg-[var(--accent-soft)] font-medium text-[var(--accent)]'
+												: ''}"
+										>
+											{ch.title || `Chapter ${ch.order + 1}`}
+										</button>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					{/if}
-				</div>
-			{/if}
 
-			<!-- Read-along on/off. The audiobook and the ebook are the same
+					<!-- Read-along on/off. The audiobook and the ebook are the same
 			     page; this decides whether the audio drives it. -->
-			<button
-				onclick={toggleReadAlong}
-				class="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition-colors {readAlong
-					? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-					: 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]'}"
-				role="switch"
-				aria-checked={readAlong}
-				aria-label="Read along with the audiobook"
-				title="Read-along {readAlong ? 'on' : 'off'} (Shift+A)"
-			>
-				<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						d="M4 14v-3a8 8 0 0116 0v3M4 14a2 2 0 012-2h1v6H6a2 2 0 01-2-2v-2zm16 0a2 2 0 00-2-2h-1v6h1a2 2 0 002-2v-2z"
-					/>
-					{#if !readAlong}
-						<path stroke-linecap="round" d="M3 3l18 18" />
-					{/if}
-				</svg>
-				<span
-					class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors {readAlong
-						? 'bg-[var(--accent)]'
-						: 'bg-[var(--border)]'}"
-				>
-					<span
-						class="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all {readAlong
-							? 'left-3'
-							: 'left-0.5'}"
-					></span>
-				</span>
-			</button>
-
-			<!-- How much of the book has audio timing. Worth surfacing rather than
-			     leaving to a notice: it is the one number that says whether a
-			     book's read-along is trustworthy, and it varies per book. -->
-			{#if alignStats && readAlong}
-				<div class="relative">
 					<button
-						onclick={() => (showSyncPanel = !showSyncPanel)}
-						class="flex items-center gap-1 rounded border px-2 py-1.5 text-xs tabular-nums transition-colors {syncTone}"
-						aria-label="Sync coverage"
-						title="How much of the book is synced to the audio"
-					>
-						<svg
-							class="h-3.5 w-3.5"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-							stroke-width="2"
-						>
-							<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-						</svg>
-						{Math.round((coverage ?? 0) * 100)}%
-					</button>
-
-					{#if showSyncPanel}
-						<button
-							class="fixed inset-0 z-40 cursor-default"
-							onclick={() => (showSyncPanel = false)}
-							aria-label="Close sync report"
-						></button>
-						<div
-							class="absolute top-full right-0 z-50 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)]"
-						>
-							<div class="mb-2 flex items-baseline justify-between">
-								<span class="text-sm font-medium text-[var(--fg)]">Sync coverage</span>
-								<span class="text-sm text-[var(--accent)] tabular-nums">
-									{Math.round((coverage ?? 0) * 100)}%
-								</span>
-							</div>
-
-							<!-- Two directions, because they fail differently: text with no
-							     audio is usually front matter, audio with no text means the
-							     transcript and the book have diverged. -->
-							<dl class="flex flex-col gap-1.5 text-xs">
-								<div class="flex items-baseline justify-between gap-3">
-									<dt class="text-[var(--muted)]">Lines with audio</dt>
-									<dd class="text-[var(--fg)] tabular-nums">
-										{alignStats.timedSentences.toLocaleString()} of {alignStats.totalSentences.toLocaleString()}
-									</dd>
-								</div>
-								<div class="flex items-baseline justify-between gap-3">
-									<dt class="text-[var(--muted)]">Narration matched to text</dt>
-									<dd class="text-[var(--fg)] tabular-nums">
-										{alignStats.cueCount > 0
-											? Math.round((alignStats.matchedCues / alignStats.cueCount) * 100)
-											: 0}%
-									</dd>
-								</div>
-							</dl>
-
-							<p class="mt-2 text-xs text-[var(--muted)]">
-								{#if (coverage ?? 0) >= 0.95}
-									Everything the narrator reads should highlight.
-								{:else}
-									Unsynced passages are shown but never highlight. Scroll or use the contents to
-									read through them.
-								{/if}
-							</p>
-							<p class="mt-2 text-xs text-[var(--muted)]">
-								A few percent is normal: covers, contents pages and unspoken lines have no audio to
-								sync to.
-							</p>
-						</div>
-					{/if}
-				</div>
-			{/if}
-
-			<!-- Sync offset -->
-			{#if $reader.cueIndex && readAlong}
-				<div class="relative">
-					<button
-						onclick={() => (showOffsetPanel = !showOffsetPanel)}
-						class="flex items-center gap-1 rounded border px-2 py-1.5 text-xs tabular-nums transition-colors {effectiveOffset !==
-						0
+						onclick={toggleReadAlong}
+						class="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition-colors {readAlong
 							? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
 							: 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]'}"
-						aria-label="Adjust sync offset"
+						role="switch"
+						aria-checked={readAlong}
+						aria-label="Read along with the audiobook"
+						title="Read-along {readAlong ? 'on' : 'off'} (Shift+A)"
 					>
 						<svg
-							class="h-3.5 w-3.5"
+							class="h-4 w-4"
 							fill="none"
 							stroke="currentColor"
 							viewBox="0 0 24 24"
 							stroke-width="2"
 						>
-							<circle cx="12" cy="12" r="9" />
-							<path stroke-linecap="round" d="M12 7v5l3 2" />
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M4 14v-3a8 8 0 0116 0v3M4 14a2 2 0 012-2h1v6H6a2 2 0 01-2-2v-2zm16 0a2 2 0 00-2-2h-1v6h1a2 2 0 002-2v-2z"
+							/>
+							{#if !readAlong}
+								<path stroke-linecap="round" d="M3 3l18 18" />
+							{/if}
 						</svg>
-						{formatOffset(effectiveOffset)}
+						<span
+							class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors {readAlong
+								? 'bg-[var(--accent)]'
+								: 'bg-[var(--border)]'}"
+						>
+							<span
+								class="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all {readAlong
+									? 'left-3'
+									: 'left-0.5'}"
+							></span>
+						</span>
 					</button>
 
-					{#if showOffsetPanel}
-						<button
-							class="fixed inset-0 z-40 cursor-default"
-							onclick={() => (showOffsetPanel = false)}
-							aria-label="Close sync offset"
-						></button>
-						<div
-							class="absolute top-full right-0 z-50 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)]"
-						>
-							<div class="mb-2 flex items-baseline justify-between">
-								<span class="text-sm font-medium text-[var(--fg)]">Sync offset</span>
-								<span class="text-sm text-[var(--accent)] tabular-nums">
-									{formatOffset(effectiveOffset)}
-								</span>
-							</div>
-
-							<div class="flex items-center gap-2">
-								<button
-									onclick={() => nudgeOffset(-0.1)}
-									class="h-9 w-9 shrink-0 rounded border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]"
-									aria-label="Move highlight later"
+					<!-- How much of the book has audio timing. Worth surfacing rather than
+			     leaving to a notice: it is the one number that says whether a
+			     book's read-along is trustworthy, and it varies per book. -->
+					{#if alignStats && readAlong}
+						<div class="relative">
+							<button
+								onclick={() => (showSyncPanel = !showSyncPanel)}
+								class="flex items-center gap-1 rounded border px-2 py-1.5 text-xs tabular-nums transition-colors {syncTone}"
+								aria-label="Sync coverage"
+								title="How much of the book is synced to the audio"
+							>
+								<svg
+									class="h-3.5 w-3.5"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+									stroke-width="2"
 								>
-									−
-								</button>
-								<input
-									type="range"
-									min={-MAX_OFFSET}
-									max={MAX_OFFSET}
-									step="0.05"
-									value={effectiveOffset}
-									oninput={(e) => setOffsetValue(parseFloat(e.currentTarget.value))}
-									class="min-w-0 flex-1 accent-[var(--accent)]"
-									aria-label="Sync offset in seconds"
-								/>
+									<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+								</svg>
+								{Math.round((coverage ?? 0) * 100)}%
+							</button>
+
+							{#if showSyncPanel}
 								<button
-									onclick={() => nudgeOffset(0.1)}
-									class="h-9 w-9 shrink-0 rounded border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]"
-									aria-label="Move highlight earlier"
+									class="fixed inset-0 z-40 cursor-default"
+									onclick={() => (showSyncPanel = false)}
+									aria-label="Close sync report"
+								></button>
+								<div
+									class="absolute top-full right-0 z-50 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)]"
 								>
-									+
-								</button>
-							</div>
+									<div class="mb-2 flex items-baseline justify-between">
+										<span class="text-sm font-medium text-[var(--fg)]">Sync coverage</span>
+										<span class="text-sm text-[var(--accent)] tabular-nums">
+											{Math.round((coverage ?? 0) * 100)}%
+										</span>
+									</div>
 
-							<p class="mt-2 text-xs text-[var(--muted)]">
-								{#if effectiveOffset > 0}
-									Highlight runs {effectiveOffset.toFixed(2)}s ahead of the audio.
-								{:else if effectiveOffset < 0}
-									Highlight runs {Math.abs(effectiveOffset).toFixed(2)}s behind the audio.
-								{:else}
-									Highlight follows the audio exactly.
-								{/if}
-							</p>
+									<!-- Two directions, because they fail differently: text with no
+							     audio is usually front matter, audio with no text means the
+							     transcript and the book have diverged. -->
+									<dl class="flex flex-col gap-1.5 text-xs">
+										<div class="flex items-baseline justify-between gap-3">
+											<dt class="text-[var(--muted)]">Lines with audio</dt>
+											<dd class="text-[var(--fg)] tabular-nums">
+												{alignStats.timedSentences.toLocaleString()} of {alignStats.totalSentences.toLocaleString()}
+											</dd>
+										</div>
+										<div class="flex items-baseline justify-between gap-3">
+											<dt class="text-[var(--muted)]">Narration matched to text</dt>
+											<dd class="text-[var(--fg)] tabular-nums">
+												{alignStats.cueCount > 0
+													? Math.round((alignStats.matchedCues / alignStats.cueCount) * 100)
+													: 0}%
+											</dd>
+										</div>
+									</dl>
 
-							<div class="mt-2 flex items-center justify-between gap-2">
-								<span class="text-xs text-[var(--muted)]">
-									{hasBookOffset ? 'Saved for this book' : 'Using global default'}
-								</span>
-								<div class="flex gap-2">
-									<button
-										onclick={() => setOffsetValue(0)}
-										class="rounded px-2 py-1 text-xs text-[var(--fg)] hover:bg-[var(--surface-hover)]"
-									>
-										Zero
-									</button>
-									{#if hasBookOffset}
-										<button
-											onclick={clearBookOffset}
-											class="rounded px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]"
-										>
-											Use default
-										</button>
-									{/if}
+									<p class="mt-2 text-xs text-[var(--muted)]">
+										{#if (coverage ?? 0) >= 0.95}
+											Everything the narrator reads should highlight.
+										{:else}
+											Unsynced passages are shown but never highlight. Scroll or use the contents to
+											read through them.
+										{/if}
+									</p>
+									<p class="mt-2 text-xs text-[var(--muted)]">
+										A few percent is normal: covers, contents pages and unspoken lines have no audio
+										to sync to.
+									</p>
 								</div>
-							</div>
-							<p class="mt-2 text-xs text-[var(--muted)]">Keys: [ and ] adjust by 0.1s.</p>
+							{/if}
 						</div>
 					{/if}
-				</div>
-			{/if}
 
-			<button
-				onclick={() => (showSettings = !showSettings)}
-				class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
-				aria-label="Settings"
-			>
-				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-					/>
-					<circle
-						cx="12"
-						cy="12"
-						r="3"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-					/>
-				</svg>
-			</button>
+					<!-- Sync offset -->
+					{#if $reader.cueIndex && readAlong}
+						<div class="relative">
+							<button
+								onclick={() => (showOffsetPanel = !showOffsetPanel)}
+								class="flex items-center gap-1 rounded border px-2 py-1.5 text-xs tabular-nums transition-colors {effectiveOffset !==
+								0
+									? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+									: 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)]'}"
+								aria-label="Adjust sync offset"
+							>
+								<svg
+									class="h-3.5 w-3.5"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+									stroke-width="2"
+								>
+									<circle cx="12" cy="12" r="9" />
+									<path stroke-linecap="round" d="M12 7v5l3 2" />
+								</svg>
+								{formatOffset(effectiveOffset)}
+							</button>
+
+							{#if showOffsetPanel}
+								<button
+									class="fixed inset-0 z-40 cursor-default"
+									onclick={() => (showOffsetPanel = false)}
+									aria-label="Close sync offset"
+								></button>
+								<div
+									class="absolute top-full right-0 z-50 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)]"
+								>
+									<div class="mb-2 flex items-baseline justify-between">
+										<span class="text-sm font-medium text-[var(--fg)]">Sync offset</span>
+										<span class="text-sm text-[var(--accent)] tabular-nums">
+											{formatOffset(effectiveOffset)}
+										</span>
+									</div>
+
+									<div class="flex items-center gap-2">
+										<button
+											onclick={() => nudgeOffset(-0.1)}
+											class="h-9 w-9 shrink-0 rounded border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+											aria-label="Move highlight later"
+										>
+											−
+										</button>
+										<input
+											type="range"
+											min={-MAX_OFFSET}
+											max={MAX_OFFSET}
+											step="0.05"
+											value={effectiveOffset}
+											oninput={(e) => setOffsetValue(parseFloat(e.currentTarget.value))}
+											class="min-w-0 flex-1 accent-[var(--accent)]"
+											aria-label="Sync offset in seconds"
+										/>
+										<button
+											onclick={() => nudgeOffset(0.1)}
+											class="h-9 w-9 shrink-0 rounded border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+											aria-label="Move highlight earlier"
+										>
+											+
+										</button>
+									</div>
+
+									<p class="mt-2 text-xs text-[var(--muted)]">
+										{#if effectiveOffset > 0}
+											Highlight runs {effectiveOffset.toFixed(2)}s ahead of the audio.
+										{:else if effectiveOffset < 0}
+											Highlight runs {Math.abs(effectiveOffset).toFixed(2)}s behind the audio.
+										{:else}
+											Highlight follows the audio exactly.
+										{/if}
+									</p>
+
+									<div class="mt-2 flex items-center justify-between gap-2">
+										<span class="text-xs text-[var(--muted)]">
+											{hasBookOffset ? 'Saved for this book' : 'Using global default'}
+										</span>
+										<div class="flex gap-2">
+											<button
+												onclick={() => setOffsetValue(0)}
+												class="rounded px-2 py-1 text-xs text-[var(--fg)] hover:bg-[var(--surface-hover)]"
+											>
+												Zero
+											</button>
+											{#if hasBookOffset}
+												<button
+													onclick={clearBookOffset}
+													class="rounded px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+												>
+													Use default
+												</button>
+											{/if}
+										</div>
+									</div>
+									<p class="mt-2 text-xs text-[var(--muted)]">Keys: [ and ] adjust by 0.1s.</p>
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					<button
+						onclick={() => (showSettings = !showSettings)}
+						class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
+						aria-label="Settings"
+					>
+						<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+							/>
+							<circle
+								cx="12"
+								cy="12"
+								r="3"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+							/>
+						</svg>
+					</button>
+				</div>
+			</div>
 		</div>
 
 		<!-- Progress strip: chapter/whole-book readout with chapter markers.
 		     Always visible (unlike the rest of the chrome); tapping the readout
-		     cycles through the modes enabled in settings. -->
+		     cycles through the modes enabled in settings. When the chrome hides
+		     the top bar's space collapses beneath it, so the strip rises to the
+		     top and the reader text sits right below it. -->
 		{#if readAlong}
 			<div class="relative z-20 border-b border-[var(--border)] bg-[var(--bg)]/90">
-				<button
-					onclick={cycleProgressMode}
-					disabled={availableModes.length < 2}
-					class="flex w-full items-center justify-between gap-2 px-3 pt-1 pb-0.5 text-[11px] text-[var(--muted)] tabular-nums"
-					aria-label="Progress: {progressLabel}. Tap to switch"
-					title="Tap to switch: chapter %, book %, time left in chapter"
-				>
-					<span>{progressLabel}</span>
-					{#if progressTitleLabel}
-						<span class="truncate text-right">{progressTitleLabel}</span>
-					{/if}
-				</button>
 				<div class="relative h-1.5 w-full bg-[var(--border)]">
 					<div
 						class="absolute top-[1.5px] h-[3px] bg-[var(--accent)] {progressRTL
@@ -1539,6 +1594,18 @@
 						></div>
 					{/each}
 				</div>
+				<button
+					onclick={cycleProgressMode}
+					disabled={availableModes.length < 2}
+					class="flex w-full items-center justify-between gap-2 px-3 pt-0.5 pb-1 text-[11px] text-[var(--muted)] tabular-nums"
+					aria-label="Progress: {progressLabel}. Tap to switch"
+					title="Tap to switch: chapter %, book %, time left in chapter"
+				>
+					<span>{progressLabel}</span>
+					{#if progressTitleLabel}
+						<span class="truncate text-right">{progressTitleLabel}</span>
+					{/if}
+				</button>
 			</div>
 		{/if}
 
