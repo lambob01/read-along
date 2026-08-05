@@ -1,7 +1,26 @@
 import { PUBLIC_ABS_ORIGIN } from '$env/static/public';
+import { env } from '$env/dynamic/private';
+import { ProxyAgent } from 'undici';
+import type { Dispatcher } from 'undici';
 import type { RequestHandler } from './$types';
 
 const ABS_ORIGIN = PUBLIC_ABS_ORIGIN || 'http://localhost:13378';
+
+/**
+ * The dev server fetches the origin itself, so its connection needs the same
+ * VPN as the browser. `ABS_HTTP_PROXY` names a local proxy (e.g. Clash Verge's
+ * mixed port) to route that traffic through; unset, it connects directly.
+ */
+const ABS_PROXY = env.ABS_HTTP_PROXY || '';
+const dispatcher: Dispatcher | undefined = ABS_PROXY ? new ProxyAgent(ABS_PROXY) : undefined;
+
+function fetchWithProxy(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+	// Node's global fetch is undici's, so a `dispatcher` in init routes it
+	// through the proxy even though the type doesn't know the option.
+	return dispatcher
+		? globalThis.fetch(input, { ...init, dispatcher } as RequestInit)
+		: globalThis.fetch(input, init);
+}
 
 function filterHeaders(headers: Headers): Headers {
 	const filtered = new Headers();
@@ -35,7 +54,7 @@ async function proxy(
 	}
 
 	try {
-		const res = await fetch(target.toString(), init);
+		const res = await fetchWithProxy(target.toString(), init);
 
 		const resHeaders = new Headers();
 		res.headers.forEach((value, key) => {
