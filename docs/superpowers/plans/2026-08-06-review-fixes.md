@@ -121,14 +121,18 @@ Append to `src/lib/reader/epubRenderer.dom.test.ts`:
 describe('cloneForRender sanitization', () => {
 	it('strips event handler attributes from cloned content', () => {
 		const { container, handle, index } = setup(
-			['<p onclick="window.pwned = 1">朝が来た。</p>'],
+			['<p onclick="window.pwned = 1" ONCLICK="window.pwned2 = 1">朝が来た。</p>'],
 			[['朝が来た。', 0, 2]]
 		);
 		// Nothing is mounted until a chapter is anchored.
 		handle.ensureVisible(index.sentences[0].id);
 
-		container.querySelectorAll('.reader-block p').forEach((p) => {
+		container.querySelectorAll('.reader-block').forEach((p) => {
+			// `ONCLICK` exercises the case-insensitive strip: XHTML keeps
+			// attribute case, and browsers treat event-handler attributes as
+			// case-insensitive, so an uppercase variant would still compile.
 			expect(p.hasAttribute('onclick')).toBe(false);
+			expect(p.hasAttribute('ONCLICK')).toBe(false);
 		});
 	});
 
@@ -210,7 +214,12 @@ function cloneForRender(el: Element): HTMLElement {
 		// Snapshot the attributes: removing them while iterating is fine, but
 		// `attributes` is live.
 		for (const attr of Array.from(node.attributes)) {
-			if (attr.name.startsWith('on') || DROP_CODE_ATTRS.includes(attr.name)) {
+			// Case-insensitive: XHTML keeps attribute case (ONCLICK survives
+			// the XML parser) and browsers treat event-handler content
+			// attributes as ASCII case-insensitive, so a hostile book only
+			// needs to uppercase the name to evade a lowercase match.
+			const name = attr.name.toLowerCase();
+			if (name.startsWith('on') || DROP_CODE_ATTRS.includes(name)) {
 				node.removeAttribute(attr.name);
 			}
 		}
