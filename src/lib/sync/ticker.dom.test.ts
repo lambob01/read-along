@@ -371,4 +371,32 @@ describe('createSyncController', () => {
 		expect(audio.listenerCount('ended')).toBe(0);
 		expect(audio.listenerCount('seeked')).toBe(0);
 	});
+
+	it('re-samples immediately on a controller seek', () => {
+		// The element's `seeked` event is covered elsewhere; this pins the
+		// controller's own seek(), which sets the position AND evaluates in
+		// the same call.
+		const audio = makeAudio();
+		const seen: (number | null)[] = [];
+		const sentences = [
+			{ id: 0, start: 0, end: 2 },
+			{ id: 1, start: 5, end: 7 }
+		];
+		const index: TimingIndex = {
+			sentences,
+			starts: Float64Array.from(sentences.map((s) => s.start)),
+			ends: Float64Array.from(sentences.map((s) => s.end))
+		};
+		const controller = createSyncController(audio as unknown as HTMLAudioElement, index, (id) =>
+			seen.push(id)
+		);
+
+		// Paused, and no frame or timer has run: the seek has to do the
+		// whole job by itself.
+		controller.seek(5.5);
+
+		expect(audio.currentTime).toBe(5.5);
+		expect(seen).toEqual([1]);
+		controller.destroy();
+	});
 });

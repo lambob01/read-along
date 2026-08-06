@@ -309,4 +309,46 @@ describe('createRepeatController', () => {
 		expect(audio.pauseCalls).toBe(0);
 		c.destroy();
 	});
+
+	it('does not re-fire a unit whose end exactly equals the last reported end', () => {
+		// Only reachable with damaged input (two units sharing an end time),
+		// but the suppression is load-bearing: a re-fire would double-pause.
+		const sentences = [
+			{ id: 10, start: 0, end: 2 },
+			{ id: 11, start: 1, end: 2 }
+		];
+		const index: TimingIndex = {
+			sentences,
+			starts: Float64Array.from(sentences.map((s) => s.start)),
+			ends: Float64Array.from(sentences.map((s) => s.end))
+		};
+		const c = createRepeatController(audio as unknown as HTMLAudioElement, index, {
+			getOffset: () => offset,
+			onUnitEnd: (u) => ended.push(u.id)
+		});
+
+		audio.paused = false;
+		playTo(audio, 1.9);
+		playTo(audio, 2.01);
+		expect(ended).toEqual([10]);
+		expect(audio.pauseCalls).toBe(1);
+
+		// Cross the shared boundary again — a rewind whose `seeked` never
+		// fires, so the scan re-finds the same end. Kept to sub-tick steps so
+		// the crossing is a scan, not a jump: only the scan's dedupe stands
+		// between one pause and two.
+		audio.paused = false;
+		playTo(audio, 0.5);
+		playTo(audio, 0.7);
+		playTo(audio, 0.9);
+		playTo(audio, 1.1);
+		playTo(audio, 1.3);
+		playTo(audio, 1.5);
+		playTo(audio, 1.7);
+		playTo(audio, 1.9);
+		playTo(audio, 2.01);
+		expect(ended).toEqual([10]);
+		expect(audio.pauseCalls).toBe(1);
+		c.destroy();
+	});
 });
