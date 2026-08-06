@@ -12,6 +12,9 @@ export const DEFAULT_ANKI_URL = 'http://localhost:8765';
 
 const ANKI_VERSION = 6;
 
+/** How long to wait for AnkiConnect before declaring it unreachable. */
+const REQUEST_TIMEOUT_MS = 10000;
+
 export class AnkiError extends Error {
 	constructor(
 		message: string,
@@ -36,6 +39,9 @@ async function invoke<T>(
 	const body: Record<string, unknown> = { action, version: ANKI_VERSION, params };
 	if (target.key) body.key = target.key;
 
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
 	let res: Response;
 	try {
 		res = await fetch(target.url, {
@@ -43,13 +49,18 @@ async function invoke<T>(
 			// No custom headers: anything beyond a simple request makes the
 			// browser preflight, and AnkiConnect answers OPTIONS only for
 			// origins already in webCorsOriginList.
-			body: JSON.stringify(body)
+			body: JSON.stringify(body),
+			signal: controller.signal
 		});
 	} catch {
+		// An abort and a refused connection are the same failure to the user:
+		// AnkiConnect never answered.
 		throw new AnkiError(
 			`Could not reach Anki at ${target.url}. Check that Anki is open with AnkiConnect installed, and that this site's address is in AnkiConnect's webCorsOriginList.`,
 			'unreachable'
 		);
+	} finally {
+		clearTimeout(timer);
 	}
 
 	if (!res.ok) {
