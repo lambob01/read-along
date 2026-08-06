@@ -60,7 +60,13 @@ function createPlayerStore() {
 	function loadBookmarks(): Record<string, number> {
 		if (typeof localStorage === 'undefined') return {};
 		try {
-			return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+			const parsed = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+			// JSON.parse('null') or JSON.parse('"x"') succeed but are not the
+			// object the callers index into; without the shape check,
+			// getBookmark throws a TypeError and the details page dies.
+			return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+				? (parsed as Record<string, number>)
+				: {};
 		} catch {
 			return {};
 		}
@@ -127,7 +133,7 @@ function createPlayerStore() {
 		},
 		skipForward(seconds: number = 10) {
 			withAudio((a) => {
-				a.currentTime = Math.min(a.duration || 0, a.currentTime + seconds);
+				a.currentTime = clampSeek(a.currentTime + seconds, a.duration);
 			}, undefined);
 		},
 		setChapter(n: number) {
@@ -135,6 +141,12 @@ function createPlayerStore() {
 		},
 		setSrc(url: string) {
 			currentSrc = url;
+			// The store keeps the previous book's position until the new
+			// source's first timeupdate — many seconds on a slow remote file,
+			// or forever if playback is never pressed — and the reader's
+			// bookmark saves would write that stale position under the new
+			// book. Zero it the moment the source changes.
+			update((s) => ({ ...s, currentTime: 0, duration: 0, playing: false }));
 			withAudio((a) => {
 				a.src = url;
 				a.load();
