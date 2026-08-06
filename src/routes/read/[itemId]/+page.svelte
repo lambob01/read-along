@@ -434,10 +434,15 @@
 	});
 
 	$effect(() => {
-		// Dependencies: the active sentence (audio moved) and the detached
-		// flag (button appeared/disappeared). Reading the store values inside
-		// the effect body is what subscribes the effect to them.
+		// Dependencies: the active sentence and the audio clock (audio moved),
+		// and the detached flag (button appeared/disappeared). Re-aiming on
+		// currentTime as well as on line boundaries keeps the arrow current
+		// while the narration crosses the viewport mid-line — a sentence can
+		// be several seconds long, which used to delay the flip until the
+		// next line boundary. Reading the store values inside the effect body
+		// is what subscribes the effect to them.
 		$reader.activeSentenceId;
+		$player.currentTime;
 		if (!detached || !scrollerEl) return;
 		narrationDir = currentNarrationDirection();
 	});
