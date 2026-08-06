@@ -1613,12 +1613,16 @@ const SENTENCE_END_RE = /[.!?\u3002\uFF0E\uFF01\uFF1F\u2026\u00BB"」』]$/;
 const DIALOGUE_START_RE = /^[-—]/;
 ```
 
-And in the inner while loop (lines 37-48), remove the `nextCue` punctuation break:
+And in the inner while loop (lines 37-48), remove the `nextCue` punctuation break and add a break for a run that started with non-speech:
 
 ```ts
 		while (cueIdx + 1 < filtered.length) {
 			const nextCue = filtered[cueIdx + 1];
 			if (SENTENCE_END_RE.test(mergedText.trimEnd())) break;
+			// A run that started with a non-speech cue stays on its own: the
+			// point of showNonSpeech is seeing [music] lines separately, and
+			// the nextCue guard below keeps speech from absorbing them.
+			if (isNonSpeech(mergedText.trim())) break;
 			if (isNonSpeech(nextCue.text)) break;
 			const gap = nextCue.start - mergedEnd;
 			if (gap > gapThreshold) break;
@@ -1629,10 +1633,12 @@ And in the inner while loop (lines 37-48), remove the `nextCue` punctuation brea
 		}
 ```
 
+Note: `shows non-speech when option is set` ([music] + Hello., showNonSpeech) must STILL produce 2 sentences — the new non-speech-start break is what keeps it that way while the fragment case merges.
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/lib/sync/sync.test.ts`
-Expected: all tests PASS, including `splits Japanese sentences on 。`, `splits on fullwidth ！ and ？`, `treats a closing bracket as terminal`, and `does not merge sentences ending with punctuation` — these all end their *first* cue in punctuation, which the line-39 break still splits.
+Expected: all tests PASS, including `splits Japanese sentences on 。`, `splits on fullwidth ！ and ？`, `treats a closing bracket as terminal`, `does not merge sentences ending with punctuation` (these all end their *first* cue in punctuation, which the line-39 break still splits), and `shows non-speech when option is set` (kept at 2 sentences by the non-speech-start break).
 
 - [ ] **Step 5: Commit**
 
