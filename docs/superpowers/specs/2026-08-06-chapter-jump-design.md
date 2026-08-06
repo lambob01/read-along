@@ -32,13 +32,13 @@ The target position travels in the URL as a query parameter: `?at=<seconds>`. Th
 
 ## Edge Cases
 
-| Case | Behavior |
-| --- | --- |
-| `at` missing / NaN / negative | Falls back to bookmark flow |
-| `at` beyond the book's duration | `clampSeek` clamps to the end once duration is known |
-| Book with no audio track | Existing no-audio notice; no seek is attempted |
-| `at` present together with `restart=1` | `at` wins |
-| Refresh / back / forward with `?at=` in the URL | Re-seeks to the chapter — intended |
+| Case                                            | Behavior                                             |
+| ----------------------------------------------- | ---------------------------------------------------- |
+| `at` missing / NaN / negative                   | Falls back to bookmark flow                          |
+| `at` beyond the book's duration                 | `clampSeek` clamps to the end once duration is known |
+| Book with no audio track                        | Existing no-audio notice; no seek is attempted       |
+| `at` present together with `restart=1`          | `at` wins                                            |
+| Refresh / back / forward with `?at=` in the URL | Re-seeks to the chapter — intended                   |
 
 ## Testing
 

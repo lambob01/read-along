@@ -25,10 +25,12 @@
 ### Task 1: Pure `parseStartParam` parser with tests
 
 **Files:**
+
 - Create: `src/lib/reader/startParam.ts`
 - Create: `src/lib/reader/startParam.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing
 - Produces: `parseStartParam(value: string | null): number | null` — the seconds to seek to, or null when the parameter is missing/empty/NaN/negative. Task 2 consumes this.
 
@@ -117,9 +119,11 @@ git commit -m "Parse the reader's at param as a pure, tested function"
 ### Task 2: Seek to the `at` param in the reader's onMount
 
 **Files:**
+
 - Modify: `src/routes/read/[itemId]/+page.svelte` (onMount, the bookmark-resolution block around lines 501-511)
 
 **Interfaces:**
+
 - Consumes: `parseStartParam(value: string | null): number | null` from `$lib/reader/startParam` (Task 1); `player.seekWhenReady` (existing); `$page.url.searchParams` (existing)
 - Produces: the reader seeks to `?at=` when present and valid, before falling back to restart/bookmark
 
@@ -137,33 +141,29 @@ In `src/routes/read/[itemId]/+page.svelte`:
 1. Add the import alongside the other `$lib` imports (near the `loadTextSource` import, line ~30):
 
 ```ts
-	import { parseStartParam } from '$lib/reader/startParam';
+import { parseStartParam } from '$lib/reader/startParam';
 ```
 
 2. In `onMount`, next to the existing restart line (currently `const restart = $page.url.searchParams.get('restart') === '1';`), add:
 
 ```ts
-		const startParam = parseStartParam($page.url.searchParams.get('at'));
+const startParam = parseStartParam($page.url.searchParams.get('at'));
 ```
 
 3. Replace the bookmark resolution inside the `if (audioSrc)` block:
 
 ```ts
-			if (audioSrc) {
-				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
-				player.setSrc(src);
-				const bookmark =
-					startParam !== null
-						? startParam
-						: restart
-							? 0
-							: (player.getBookmark(itemId) ?? 0);
-				// Waits for metadata rather than guessing at a delay: 500ms was
-				// enough on a local file and nowhere near enough for a long book
-				// over a remote connection, where the seek landed before the
-				// element knew its duration and was discarded.
-				if (bookmark > 0) player.seekWhenReady(bookmark);
-			}
+if (audioSrc) {
+	const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
+	player.setSrc(src);
+	const bookmark =
+		startParam !== null ? startParam : restart ? 0 : (player.getBookmark(itemId) ?? 0);
+	// Waits for metadata rather than guessing at a delay: 500ms was
+	// enough on a local file and nowhere near enough for a long book
+	// over a remote connection, where the seek landed before the
+	// element knew its duration and was discarded.
+	if (bookmark > 0) player.seekWhenReady(bookmark);
+}
 ```
 
 (`bookmark > 0` stays as the guard: `at=0` seeks nowhere, which is correct for chapter 1. `at` wins over `restart` by construction — it is checked first.)
@@ -185,9 +185,11 @@ git commit -m "Seek to the at param instead of the bookmark when present"
 ### Task 3: Make details-page chapters clickable
 
 **Files:**
+
 - Modify: `src/routes/book/[itemId]/+page.svelte` (the Chapters list, lines 279-293)
 
 **Interfaces:**
+
 - Consumes: `goto` from `$app/navigation` (already imported); `itemId` (already derived); `ch.start`/`ch.title` (already in scope)
 - Produces: each chapter row navigates to `/read/<itemId>?at=<ch.start>`
 
@@ -201,28 +203,28 @@ Expected: only the pre-existing `PUBLIC_ABS_ORIGIN` env error.
 In `src/routes/book/[itemId]/+page.svelte`, replace the `<ol>` block (lines 279-293) with:
 
 ```svelte
-					<ol class="mt-3 divide-y divide-[var(--border)]">
-						{#each visibleChapters as ch, i}
-							<li>
-								<button
-									onclick={() => goto(`/read/${itemId}?at=${ch.start}`)}
-									class="flex w-full items-baseline gap-3 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
-									aria-label={`Jump to chapter ${i + 1}: ${ch.title}`}
-									title={`Jump to chapter ${i + 1}`}
-								>
-									<span class="w-6 shrink-0 text-xs text-[var(--muted)] tabular-nums">
-										{i + 1}
-									</span>
-									<span class="min-w-0 flex-1 truncate text-sm text-[var(--fg)]">
-										{ch.title}
-									</span>
-									<span class="shrink-0 text-xs text-[var(--muted)] tabular-nums">
-										{formatTimestamp(ch.start)}
-									</span>
-								</button>
-							</li>
-						{/each}
-					</ol>
+<ol class="mt-3 divide-y divide-[var(--border)]">
+	{#each visibleChapters as ch, i}
+		<li>
+			<button
+				onclick={() => goto(`/read/${itemId}?at=${ch.start}`)}
+				class="flex w-full items-baseline gap-3 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
+				aria-label={`Jump to chapter ${i + 1}: ${ch.title}`}
+				title={`Jump to chapter ${i + 1}`}
+			>
+				<span class="w-6 shrink-0 text-xs text-[var(--muted)] tabular-nums">
+					{i + 1}
+				</span>
+				<span class="min-w-0 flex-1 truncate text-sm text-[var(--fg)]">
+					{ch.title}
+				</span>
+				<span class="shrink-0 text-xs text-[var(--muted)] tabular-nums">
+					{formatTimestamp(ch.start)}
+				</span>
+			</button>
+		</li>
+	{/each}
+</ol>
 ```
 
 (The `Show all N chapters` toggle below is untouched.)
