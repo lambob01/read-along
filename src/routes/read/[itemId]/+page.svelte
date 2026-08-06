@@ -520,11 +520,7 @@
 				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
 				player.setSrc(src);
 				const bookmark =
-					startParam !== null
-						? startParam
-						: restart
-							? 0
-							: (player.getBookmark(itemId) ?? 0);
+					startParam !== null ? startParam : restart ? 0 : (player.getBookmark(itemId) ?? 0);
 				// Waits for metadata rather than guessing at a delay: 500ms was
 				// enough on a local file and nowhere near enough for a long book
 				// over a remote connection, where the seek landed before the
