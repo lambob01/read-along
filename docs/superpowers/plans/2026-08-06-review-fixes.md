@@ -407,11 +407,21 @@ class FakeAudio {
 	dataset: Record<string, string> = {};
 	readyState = 0;
 	loadCalls = 0;
+	listeners = new Map<string, Set<() => void>>();
 	load() {
 		this.loadCalls++;
 	}
-	addEventListener(_t: string, _f: () => void) {}
-	removeEventListener(_t: string, _f: () => void) {}
+	addEventListener(type: string, fn: () => void) {
+		if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+		this.listeners.get(type)!.add(fn);
+	}
+	removeEventListener(type: string, fn: () => void) {
+		this.listeners.get(type)?.delete(fn);
+	}
+	dispatchEvent(event: Event) {
+		for (const fn of this.listeners.get(event.type) ?? []) fn();
+		return true;
+	}
 }
 
 beforeEach(() => {
@@ -450,7 +460,14 @@ describe('player store', () => {
 		const { player } = await import('$lib/stores/player');
 
 		player.setSrc('book-a.mp3');
-		player.seek(42);
+		// The store follows the element via timeupdate; simulate book A having
+		// actually played to 42s before the source changes. Without the event
+		// the store never holds the old position and the test passes pre-fix.
+		const a = player.getAudioElement() as unknown as FakeAudio;
+		a.currentTime = 42;
+		a.duration = 300;
+		a.dispatchEvent(new Event('timeupdate'));
+
 		player.setSrc('book-b.mp3');
 
 		const s = get(player);
@@ -466,7 +483,7 @@ describe('player store', () => {
 		vi.resetModules();
 		const { player } = await import('$lib/stores/player');
 
-		const a = player.getAudioElement()!;
+		const a = player.getAudioElement() as unknown as FakeAudio;
 		a.currentTime = 100;
 		a.duration = NaN;
 		player.skipForward(10);
@@ -480,7 +497,7 @@ describe('player store', () => {
 		vi.resetModules();
 		const { player } = await import('$lib/stores/player');
 
-		const a = player.getAudioElement()!;
+		const a = player.getAudioElement() as unknown as FakeAudio;
 		a.currentTime = 25;
 		a.duration = 30;
 		player.skipForward(10);
