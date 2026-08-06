@@ -2,8 +2,12 @@ import type { RawCue, Sentence, Paragraph, MergeOptions } from '$lib/types';
 import { isNonSpeech } from './sanitize';
 
 /**
- * Punctuation that ends a sentence, used to decide whether the next cue is a
- * continuation of this one.
+ * Punctuation that ends a sentence. The merge only ever breaks on the text it
+ * has already merged (line 39): a cue that happens to end in punctuation is
+ * the end of the *current* utterance, so it is merged in and the break fires
+ * against the combined text. Breaking on the *next* cue's punctuation instead
+ * leaves a fragment behind — the opening of the sentence becomes its own
+ * sentence.
  *
  * Covers the Japanese terminators as well as the Latin ones. Without 。 every
  * line of a Japanese transcript looked unterminated, so consecutive cues were
@@ -37,7 +41,10 @@ export function mergeCues(cues: RawCue[], opts: MergeOptions = {}): Paragraph[] 
 		while (cueIdx + 1 < filtered.length) {
 			const nextCue = filtered[cueIdx + 1];
 			if (SENTENCE_END_RE.test(mergedText.trimEnd())) break;
-			if (SENTENCE_END_RE.test(nextCue.text.trimEnd())) break;
+			// A run that started with a non-speech cue stays on its own: the
+			// point of showNonSpeech is seeing [music] lines separately, and
+			// the nextCue guard below keeps speech from absorbing them.
+			if (isNonSpeech(mergedText.trim())) break;
 			if (isNonSpeech(nextCue.text)) break;
 			const gap = nextCue.start - mergedEnd;
 			if (gap > gapThreshold) break;

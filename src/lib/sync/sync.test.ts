@@ -262,28 +262,25 @@ describe('mergeCues', () => {
 		expect(sentences[0].text).toBe('長い文章が 二つに分かれて いる');
 	});
 
-	it('does not absorb a terminated cue into a running sentence', () => {
-		// Pre-existing behaviour, independent of script: a cue ending in
-		// punctuation always starts its own sentence, so a sentence whose
-		// final cue carries the 。 is split off from its own opening. The
-		// Latin case is asserted by 'assigns correct cueIds' below.
+	it('absorbs a terminated cue into its running sentence', () => {
+		// The final cue carries the 。 for the whole utterance; it used to be
+		// split off on its own, leaving the opening as a fragment sentence.
 		const cues: RawCue[] = [
 			{ index: 0, start: 0, end: 1, text: '長い文章が' },
 			{ index: 1, start: 1, end: 2, text: '分かれています。' }
 		];
 		const sentences = mergeCues(cues)[0].sentences;
 
-		expect(sentences).toHaveLength(2);
-		expect(sentences[0].text).toBe('長い文章が');
+		expect(sentences).toHaveLength(1);
+		expect(sentences[0].text).toBe('長い文章が 分かれています。');
 	});
 
 	it('assigns correct cueIds to merged sentences', () => {
 		const cues = makeCues('Hello', 'world', 'today.');
 		const paragraphs = mergeCues(cues);
 		const sentences = paragraphs[0].sentences;
-		expect(sentences).toHaveLength(2);
-		expect(sentences[0].cueIds).toEqual([0, 1]);
-		expect(sentences[1].cueIds).toEqual([2]);
+		expect(sentences).toHaveLength(1);
+		expect(sentences[0].cueIds).toEqual([0, 1, 2]);
 	});
 });
 
