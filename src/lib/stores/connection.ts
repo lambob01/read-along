@@ -1,8 +1,20 @@
 import { writable, type Writable } from 'svelte/store';
 
 function persisted<T>(key: string, defaultValue: T): Writable<T> {
-	const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
-	const initial: T = stored ? JSON.parse(stored) : defaultValue;
+	// The store is read at module init, so a corrupt value here throws before
+	// any UI can catch it — the app white-screens. Every other persisted
+	// store in the app wraps its reads the same way.
+	let initial: T = defaultValue;
+	if (typeof localStorage !== 'undefined') {
+		try {
+			const parsed = JSON.parse(localStorage.getItem(key) || '');
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				initial = parsed as T;
+			}
+		} catch {
+			/* corrupt storage falls back to the default */
+		}
+	}
 
 	const store = writable<T>(initial);
 
