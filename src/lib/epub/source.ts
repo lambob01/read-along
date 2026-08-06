@@ -38,7 +38,8 @@ const MIN_USABLE_COVERAGE = 0.4;
 export async function loadTextSource(
 	client: ABSClient,
 	itemId: string,
-	sources?: ItemSources
+	sources?: ItemSources,
+	fetchFileText: (client: ABSClient, itemId: string, ino: string) => Promise<string> = getFileText
 ): Promise<TextSource> {
 	const found = sources ?? (await getItemSources(client, itemId));
 
@@ -53,7 +54,21 @@ export async function loadTextSource(
 		};
 	}
 
-	const raw = await getFileText(client, itemId, found.subIno);
+	let raw: string;
+	try {
+		raw = await fetchFileText(client, itemId, found.subIno);
+	} catch (err) {
+		return {
+			mode: 'none',
+			doc: null,
+			index: null,
+			cues: null,
+			fromCache: false,
+			notice: `Subtitle could not be downloaded (${
+				err instanceof Error ? err.message : 'unknown error'
+			}); no transcript.`
+		};
+	}
 	const cues = parseCues(raw);
 
 	if (!found.epubIno) {
