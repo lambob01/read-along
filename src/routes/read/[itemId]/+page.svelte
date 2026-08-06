@@ -28,6 +28,7 @@
 		type ProgressMode
 	} from '$lib/reader/progress';
 	import { loadTextSource, type TextSourceMode } from '$lib/epub/source';
+	import { parseStartParam } from '$lib/reader/startParam';
 	import { createHighlighter, type HighlightHandle } from '$lib/reader/highlight';
 	import { primeCapture, releaseCapture } from '$lib/anki/capture';
 	import { mineSentence } from '$lib/anki/mine';
@@ -502,6 +503,7 @@
 		scrollerEl?.addEventListener('click', handleContentLinkClick);
 
 		const restart = $page.url.searchParams.get('restart') === '1';
+		const startParam = parseStartParam($page.url.searchParams.get('at'));
 
 		try {
 			const client = new ABSClient('/abs', connectionToken);
@@ -517,7 +519,12 @@
 			if (audioSrc) {
 				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
 				player.setSrc(src);
-				const bookmark = restart ? 0 : (player.getBookmark(itemId) ?? 0);
+				const bookmark =
+					startParam !== null
+						? startParam
+						: restart
+							? 0
+							: (player.getBookmark(itemId) ?? 0);
 				// Waits for metadata rather than guessing at a delay: 500ms was
 				// enough on a local file and nowhere near enough for a long book
 				// over a remote connection, where the seek landed before the
