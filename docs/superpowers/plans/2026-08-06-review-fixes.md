@@ -1693,20 +1693,25 @@ afterEach(() => {
 describe('SettingsPanel', () => {
 	it('hides the subtitle options in EPUB mode and shows them otherwise', async () => {
 		const { default: SettingsPanel } = await import('./SettingsPanel.svelte');
+		const { mount, flushSync } = await import('svelte');
 
+		// Both mounts pin `only: 'sync'` — #gap-threshold lives in the sync
+		// section, and the component defaults to the appearance tab, so without
+		// pinning the tab the assertion would pass for the wrong reason.
 		const epubHost = document.createElement('div');
-		mount(SettingsPanel, { target: epubHost, props: { showSubtitleOptions: false } });
+		mount(SettingsPanel, { target: epubHost, props: { showSubtitleOptions: false, only: 'sync' } });
 		flushSync();
 		expect(epubHost.querySelector('#gap-threshold')).toBeNull();
 
 		const subtitleHost = document.createElement('div');
-		mount(SettingsPanel, { target: subtitleHost, props: { showSubtitleOptions: true } });
+		mount(SettingsPanel, { target: subtitleHost, props: { showSubtitleOptions: true, only: 'sync' } });
 		flushSync();
 		expect(subtitleHost.querySelector('#gap-threshold')).not.toBeNull();
 	});
 
 	it('writes a control change into the settings store', async () => {
 		const { default: SettingsPanel } = await import('./SettingsPanel.svelte');
+		const { mount, flushSync } = await import('svelte');
 		const { settings } = await import('$lib/stores/settings');
 		const { get } = await import('svelte/store');
 
