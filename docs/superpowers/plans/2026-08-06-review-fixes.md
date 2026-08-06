@@ -1138,7 +1138,7 @@ git commit -m "Make the reader settings sheet keyboard accessible"
 Create `src/lib/anki/connect.test.ts`:
 
 ```ts
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ankiVersion, AnkiError } from '$lib/anki/connect';
 
 const TARGET = { url: 'http://localhost:8765' };
@@ -1165,6 +1165,10 @@ describe('ankiVersion', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn((_url: string, init: RequestInit) => {
+				// Without a signal the old code never aborts: the promise must
+				// stay pending forever, so the test fails by vitest's own
+				// timeout pre-fix rather than passing for the wrong reason.
+				if (!init.signal) return new Promise(() => {});
 				const signal = init.signal as AbortSignal;
 				return new Promise((_resolve, reject) => {
 					signal.addEventListener('abort', () => reject(new Error('Aborted')));
