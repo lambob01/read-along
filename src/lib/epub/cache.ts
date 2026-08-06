@@ -107,14 +107,28 @@ export async function saveAlignment(key: string, index: AlignedIndex): Promise<v
 }
 
 /**
- * Reconstructs the timing arrays from cached sentences. The same ordering and
- * non-overlap guarantees the aligner enforces are re-derived here, so a cached
- * index is indistinguishable from a freshly computed one.
+ * Reconstructs the timing arrays from cached sentences, re-deriving the same
+ * ordering and non-overlap guarantees `finalize` in align.ts enforces, so a
+ * cached index is indistinguishable from a freshly computed one.
  */
 export function rebuildIndex(cached: CachedAlignment): AlignedIndex {
-	const timed = cached.sentences
+	const candidates = cached.sentences
 		.filter((s) => s.timed)
 		.sort((a, b) => a.start - b.start || a.end - b.end);
+
+	const timed: AlignedSentence[] = [];
+	let prevEnd = -Infinity;
+	for (const s of candidates) {
+		if (s.end <= s.start) continue;
+		if (s.start < prevEnd) {
+			// Overlaps the previous sentence: clamp forward if that leaves a
+			// usable range, otherwise drop it, exactly as finalize does.
+			if (s.end - prevEnd < 0.05) continue;
+			s.start = prevEnd;
+		}
+		timed.push(s);
+		prevEnd = s.end;
+	}
 
 	const starts = new Float64Array(timed.length);
 	const ends = new Float64Array(timed.length);

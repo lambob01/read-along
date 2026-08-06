@@ -96,3 +96,48 @@ describe('rebuildIndex', () => {
 		expect(index.timed.length).toBe(0);
 	});
 });
+
+describe('rebuildIndex invariants', () => {
+	const base = {
+		key: 'k',
+		version: 3,
+		createdAt: 0,
+		blocks: [],
+		stats: {
+			coverage: 1,
+			totalSentences: 2,
+			timedSentences: 2,
+			cueCount: 1,
+			matchedCues: 1
+		}
+	};
+
+	it('excludes zero-width timed sentences from the arrays', () => {
+		const index = rebuildIndex({
+			...base,
+			sentences: [sentence(0, 5, 5), sentence(1, 6, 8)]
+		});
+		expect(index.timed).toHaveLength(1);
+		expect(index.starts[0]).toBe(6);
+	});
+
+	it('clamps an overlapping range forward when that leaves a usable range', () => {
+		const index = rebuildIndex({
+			...base,
+			sentences: [sentence(0, 1, 10), sentence(1, 2, 15)]
+		});
+		expect(index.starts[1]).toBe(index.ends[0]);
+		expect(index.ends[1] - index.starts[1]).toBeGreaterThanOrEqual(0.05);
+	});
+
+	it('drops an overlap whose clamped remainder would be degenerate', () => {
+		// [2,4] sits inside [1,10]; clamped forward it would start at 10 with
+		// width -6 < 0.05, so it must be dropped, exactly as finalize does.
+		const index = rebuildIndex({
+			...base,
+			sentences: [sentence(0, 1, 10), sentence(1, 2, 4)]
+		});
+		expect(index.timed).toHaveLength(1);
+		expect(Array.from(index.starts)).toEqual([1]);
+	});
+});
