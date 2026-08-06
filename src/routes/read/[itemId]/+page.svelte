@@ -43,6 +43,8 @@
 	let showVolumeSlider = $state(false);
 	let showOffsetPanel = $state(false);
 	let showToc = $state(false);
+	let settingsCloseBtn = $state<HTMLButtonElement>();
+	let settingsTriggerEl: HTMLElement | null = null;
 
 	/**
 	 * Whether the audio is driving the page. Off, this is an ebook reader: the
@@ -422,6 +424,15 @@
 			return;
 		}
 		scheduleChromeHide();
+	});
+
+	// The sheet is a dialog: focus moves in on open and back out on close.
+	$effect(() => {
+		if (showSettings) {
+			settingsCloseBtn?.focus();
+		} else if (settingsTriggerEl instanceof HTMLElement) {
+			settingsTriggerEl.focus();
+		}
 	});
 
 	function scheduleChromeHide() {
@@ -1550,7 +1561,11 @@
 					{/if}
 
 					<button
-						onclick={() => (showSettings = !showSettings)}
+						onclick={() => {
+							if (!showSettings && document.activeElement instanceof HTMLElement)
+								settingsTriggerEl = document.activeElement;
+							showSettings = !showSettings;
+						}}
 						class="rounded p-1.5 text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--fg)]"
 						aria-label="Settings"
 					>
@@ -2081,7 +2096,16 @@
 
 		<!-- Settings sheet -->
 		{#if showSettings}
-			<div class="fixed inset-0 z-50 flex justify-end" role="dialog" aria-label="Settings">
+			<div
+				class="fixed inset-0 z-50 flex justify-end"
+				role="dialog"
+				aria-modal="true"
+				aria-label="Settings"
+				tabindex="-1"
+				onkeydown={(e) => {
+					if (e.key === 'Escape') showSettings = false;
+				}}
+			>
 				<button
 					class="absolute inset-0 bg-black/30"
 					onclick={() => (showSettings = false)}
@@ -2093,6 +2117,7 @@
 					<div class="mb-4 flex items-center justify-between">
 						<h2 class="text-lg font-semibold text-[var(--fg)]">Settings</h2>
 						<button
+							bind:this={settingsCloseBtn}
 							onclick={() => (showSettings = false)}
 							class="rounded p-1 text-[var(--muted)] hover:text-[var(--fg)]"
 							aria-label="Close"
