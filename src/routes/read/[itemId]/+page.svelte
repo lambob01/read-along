@@ -160,13 +160,11 @@
 	let sourceNotice = $state<string | null>(null);
 
 	let connectionToken = '';
-	let connectionUrl = '';
 	let gapThreshold = defaultSettings.gapThreshold;
 	let showNonSpeech = defaultSettings.showNonSpeech;
 
 	const unsubConnection = connection.subscribe((s) => {
 		connectionToken = s.token;
-		connectionUrl = s.url;
 	});
 
 	const unsubSettings = settings.subscribe((s) => {

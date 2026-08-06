@@ -14,16 +14,14 @@
 	let error = $state('');
 	let searchQuery = $state('');
 
-	let connectionUrl = '';
 	let connectionToken = '';
 
 	const unsubConnection = connection.subscribe((s) => {
-		connectionUrl = s.url;
 		connectionToken = s.token;
 	});
 
 	onMount(async () => {
-		if (!connectionUrl || !connectionToken) {
+		if (!connectionToken) {
 			await goto('/');
 			return;
 		}

@@ -5,7 +5,6 @@
 	import { ABSError, getLibraries } from '$lib/abs/api';
 	import { ABSClient } from '$lib/abs/client';
 
-	let url = $state('');
 	let token = $state('');
 	let error = $state('');
 	let loading = $state(false);
@@ -24,7 +23,6 @@
 			return;
 		}
 
-		url = stored.url;
 		token = stored.token;
 
 		try {
@@ -55,13 +53,13 @@
 		try {
 			const client = new ABSClient('/abs', token.trim());
 			await getLibraries(client);
-			connection.connect(url.trim(), token.trim());
+			connection.connect(token.trim());
 			await goto('/library');
 		} catch (err) {
 			if (err instanceof ABSError) {
 				error = err.message;
 			} else {
-				error = 'Connection failed. Check your URL and token.';
+				error = 'Connection failed. Check your token.';
 			}
 		} finally {
 			loading = false;
@@ -102,23 +100,6 @@
 				class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow-md)]"
 			>
 				<form onsubmit={handleConnect} class="flex flex-col gap-4">
-					<div>
-						<label
-							class="mb-1.5 block text-xs font-medium tracking-wide text-[var(--muted)] uppercase"
-							for="url"
-						>
-							Server URL
-						</label>
-						<input
-							id="url"
-							type="text"
-							bind:value={url}
-							placeholder="https://audiobookshelf.example.com"
-							class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm text-[var(--fg)] placeholder-[var(--muted)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] focus:outline-none"
-							required
-						/>
-					</div>
-
 					<div>
 						<label
 							class="mb-1.5 block text-xs font-medium tracking-wide text-[var(--muted)] uppercase"

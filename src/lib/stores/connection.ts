@@ -42,8 +42,8 @@ function createConnectionStore() {
 
 	return {
 		subscribe,
-		connect(url: string, token: string) {
-			set({ url, token, connected: true });
+		connect(token: string) {
+			set({ url: '', token, connected: true });
 		},
 		disconnect() {
 			set({ url: '', token: '', connected: false });
