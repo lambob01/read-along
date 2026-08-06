@@ -29,6 +29,14 @@ const MAX_ANCHOR_SPAN = 1;
 /** Grace beyond the segment's own length before a capture is abandoned. */
 const STALL_TIMEOUT_MS = 15000;
 
+/**
+ * Longest segment a mine will record. A sentence is seconds long, so this is
+ * generous; its purpose is to stop a misaligned book recording a line whose
+ * end landed minutes or hours away — at 48 kHz Float32 a 30-minute capture is
+ * ~345 MB, and a longer one crashes the tab.
+ */
+const MAX_SEGMENT_SECONDS = 300;
+
 /** Seeking deep into a long remote file needs more room than a local one. */
 const SEEK_TIMEOUT_MS = 30000;
 
@@ -71,7 +79,8 @@ export interface Clip {
 	sampleRate: number;
 }
 
-export type CaptureFailure = 'unavailable' | 'load-failed' | 'stalled' | 'blocked' | 'empty';
+export type CaptureFailure =
+	'unavailable' | 'load-failed' | 'stalled' | 'blocked' | 'empty' | 'too-long';
 
 /** Where a capture got to, so a stall reports the step that hung. */
 type Stage = 'loading' | 'seeking' | 'starting' | 'recording';
@@ -382,6 +391,13 @@ export async function captureRange(
 	const from = Math.max(0, start - (opts.padStart ?? 0));
 	const to = end + (opts.padEnd ?? 0);
 	if (!(to > from)) throw new CaptureError('empty', 'That line has no duration to capture');
+
+	if (to - from > MAX_SEGMENT_SECONDS) {
+		throw new CaptureError(
+			'too-long',
+			`That line is ${Math.round(to - from)}s long — over the ${MAX_SEGMENT_SECONDS}s mining cap. Check the alignment and try a shorter line.`
+		);
+	}
 
 	const c = audioContext();
 	console.info('[readalong] capture starting', { from, to, context: c.state, src });

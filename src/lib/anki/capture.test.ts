@@ -87,3 +87,10 @@ describe('mediaToFrame', () => {
 		expect(mediaToFrame(segment, 45)).toBeNull();
 	});
 });
+
+describe('captureRange length cap', () => {
+	it('rejects a segment longer than the cap before touching audio', async () => {
+		const { captureRange } = await import('$lib/anki/capture');
+		await expect(captureRange('x', 0, 10_000)).rejects.toMatchObject({ reason: 'too-long' });
+	});
+});
