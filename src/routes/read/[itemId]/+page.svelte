@@ -158,6 +158,10 @@
 	let showSyncPanel = $state(false);
 	/** Non-fatal explanation when EPUB mode was attempted but not used. */
 	let sourceNotice = $state<string | null>(null);
+	/** Set when the page is torn down; every await in onMount must bail on it. */
+	let disposed = false;
+	/** The stream session exists but has no audio track. */
+	let noAudioNotice = $state(false);
 
 	let connectionToken = '';
 	let gapThreshold = defaultSettings.gapThreshold;
@@ -502,10 +506,12 @@
 		try {
 			const client = new ABSClient('/abs', connectionToken);
 			const item = await getItem(client, itemId);
+			if (disposed) return;
 			reader.setItem(item);
 			reader.setLoading(true);
 
 			const session = await getStreamSession(client, itemId);
+			if (disposed) return;
 			const directTrack = session.libraryItem?.media?.tracks?.[0];
 			const audioSrc = directTrack?.contentUrl;
 			if (audioSrc) {
@@ -517,6 +523,13 @@
 				// over a remote connection, where the seek landed before the
 				// element knew its duration and was discarded.
 				if (bookmark > 0) player.seekWhenReady(bookmark);
+			} else {
+				// No track: stop whatever the previous book left playing on the
+				// singleton element, or its position gets bookmarked under this
+				// book's id on destroy. setSrc('') also zeroes the store's
+				// currentTime, which the destroy guard relies on.
+				player.setSrc('');
+				noAudioNotice = true;
 			}
 
 			saveBookmarkInterval = setInterval(() => {
@@ -535,6 +548,7 @@
 			let source;
 			try {
 				source = await loadTextSource(client, itemId);
+				if (disposed) return;
 			} catch (err) {
 				source = null;
 				sourceNotice = err instanceof Error ? err.message : 'No transcript';
@@ -562,7 +576,7 @@
 				epubChapters = doc.chapters;
 
 				requestAnimationFrame(() => {
-					if (!contentEl) return;
+					if (disposed || !contentEl) return;
 					epubRender = renderEpub(index, doc.chapters, contentEl, {
 						scroller: scrollerEl,
 						onViewChapter: handleViewChapter,
@@ -585,7 +599,7 @@
 				reader.setCueIndex(cueIndex);
 
 				requestAnimationFrame(() => {
-					if (!contentEl) return;
+					if (disposed || !contentEl) return;
 					const sentenceMap = renderParagraphs(cueIndex.paragraphs, contentEl);
 					reader.setSentenceMap(sentenceMap);
 
@@ -723,6 +737,7 @@
 	}
 
 	onDestroy(() => {
+		disposed = true;
 		unsubConnection();
 		unsubSettings();
 		// Only a page that actually loaded its item may record a position. The
@@ -1634,7 +1649,7 @@
 			data-readalong={readAlong}
 			class="reader-scroller reader-pane flex-1"
 		>
-			{#if sourceNotice && $reader.cueIndex}
+			{#if (sourceNotice || noAudioNotice) && $reader.cueIndex}
 				<!--
 					Surfaced rather than logged: silent partial alignment is the
 					main failure mode of the EPUB path.
@@ -1642,7 +1657,9 @@
 				<div
 					class="reader-notice rounded border border-[var(--muted)] px-3 py-2 text-sm text-[var(--muted)]"
 				>
-					{sourceNotice}
+					{noAudioNotice
+						? 'No audio track found for this item. You can still read the text.'
+						: sourceNotice}
 				</div>
 			{:else if textMode === 'epub' && coverage !== null && coverage < 0.95 && readAlong}
 				<div
