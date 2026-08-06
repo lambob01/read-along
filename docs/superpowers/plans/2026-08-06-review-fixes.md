@@ -1469,9 +1469,10 @@ In `onMount` (lines 476-593), after each of these, add the guard:
 			reader.setItem(item);
 ```
 
-2. After `const session = await getStreamSession(client, itemId);`, replace the `audioSrc` block with:
+2. After `const session = await getStreamSession(client, itemId);`, insert the guard FIRST — before any `setSrc` — then replace the `audioSrc` block:
 
 ```ts
+			if (disposed) return;
 			const directTrack = session.libraryItem?.media?.tracks?.[0];
 			const audioSrc = directTrack?.contentUrl;
 			if (audioSrc) {
@@ -1491,8 +1492,9 @@ In `onMount` (lines 476-593), after each of these, add the guard:
 				player.setSrc('');
 				noAudioNotice = true;
 			}
-			if (disposed) return;
 ```
+
+(The guard must precede the block: a continuation that resolves after the user has moved on would otherwise write this book's `setSrc` over the next book's audio before the check could stop it.)
 
 3. After `source = await loadTextSource(client, itemId);` (the try/catch at lines 527-532), add inside the try, right after the assignment:
 
