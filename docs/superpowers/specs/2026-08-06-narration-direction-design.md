@@ -15,11 +15,11 @@ The reader's floating "Narration" button (shown when the reader is detached from
 
 While the button is visible, compare the narration element's rect against the scroller viewport rect:
 
-| Narration position | Horizontal text | Vertical text (vertical-rl) |
-| --- | --- | --- |
-| Before the viewport (already read) | Arrow **up** | Arrow **right** (behind) |
-| After the viewport (ahead) | Arrow **down** | Arrow **left** (further along) |
-| Element unmounted / on-screen | **down** (default, forward) | **left** (default, forward) |
+| Narration position                 | Horizontal text             | Vertical text (vertical-rl)    |
+| ---------------------------------- | --------------------------- | ------------------------------ |
+| Before the viewport (already read) | Arrow **up**                | Arrow **right** (behind)       |
+| After the viewport (ahead)         | Arrow **down**              | Arrow **left** (further along) |
+| Element unmounted / on-screen      | **down** (default, forward) | **left** (default, forward)    |
 
 Under `vertical-rl` reading advances leftwards, so "further along" is left and "behind" is right.
 
@@ -32,7 +32,7 @@ export function narrationDirection(
 	viewRect: DOMRect,
 	narrRect: DOMRect | null,
 	vertical: boolean
-): NarrationDirection
+): NarrationDirection;
 ```
 
 Returns the default forward direction when `narrRect` is null (unmounted chapter) or when the narration is inside the viewport.

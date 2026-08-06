@@ -27,10 +27,12 @@
 ### Task 1: Pure `narrationDirection` function with tests
 
 **Files:**
+
 - Create: `src/lib/reader/narrationDirection.ts`
 - Create: `src/lib/reader/narrationDirection.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing
 - Produces: `type NarrationDirection = 'up' | 'down' | 'left' | 'right'` and `narrationDirection(viewRect: Rect, narrRect: Rect | null, vertical: boolean): NarrationDirection` where `type Rect = Pick<DOMRect, 'top' | 'bottom' | 'left' | 'right'>`. Task 2 consumes both.
 
@@ -148,9 +150,11 @@ git commit -m "Add a pure narration-direction resolver with tests"
 ### Task 2: Aim the arrow in the reader page
 
 **Files:**
+
 - Modify: `src/routes/read/[itemId]/+page.svelte`
 
 **Interfaces:**
+
 - Consumes: `narrationDirection`, `NarrationDirection` from `$lib/reader/narrationDirection` (Task 1); `narrationSentenceId()` (already in the file, line ~672); `epubRender.elementFor(id)` / `$reader.sentenceMap.get(id)` (already used in the file); `$settings.verticalText`; `$reader.activeSentenceId`
 - Produces: a `narrationDir` `$state` kept current while the reader is detached, and the button's arrow wrapped in a rotation span driven by it
 
@@ -166,85 +170,85 @@ In `src/routes/read/[itemId]/+page.svelte`:
 1. Add the import alongside the other `$lib` imports:
 
 ```ts
-	import { narrationDirection, type NarrationDirection } from '$lib/reader/narrationDirection';
+import { narrationDirection, type NarrationDirection } from '$lib/reader/narrationDirection';
 ```
 
 2. Near the `detached` state (line ~68), add:
 
 ```ts
-	/** Which way the narration lies from the viewport, for the button's arrow. */
-	let narrationDir = $state<NarrationDirection>('down');
+/** Which way the narration lies from the viewport, for the button's arrow. */
+let narrationDir = $state<NarrationDirection>('down');
 ```
 
 3. Near `goToNarration` (line ~682), add the resolver and the scroll handler:
 
 ```ts
-	/**
-	 * Where the narration is relative to the viewport, for the button arrow.
-	 * Falls back to the forward direction when the sentence has no mounted
-	 * element or the scroller is missing.
-	 */
-	function currentNarrationDirection(): NarrationDirection {
-		if (!scrollerEl) return $settings.verticalText ? 'left' : 'down';
-		const id = narrationSentenceId();
-		if (id === null) return $settings.verticalText ? 'left' : 'down';
-		const el = epubRender ? epubRender.elementFor(id) : $reader.sentenceMap?.get(id);
-		return narrationDirection(
-			scrollerEl.getBoundingClientRect(),
-			el ? el.getBoundingClientRect() : null,
-			$settings.verticalText
-		);
-	}
+/**
+ * Where the narration is relative to the viewport, for the button arrow.
+ * Falls back to the forward direction when the sentence has no mounted
+ * element or the scroller is missing.
+ */
+function currentNarrationDirection(): NarrationDirection {
+	if (!scrollerEl) return $settings.verticalText ? 'left' : 'down';
+	const id = narrationSentenceId();
+	if (id === null) return $settings.verticalText ? 'left' : 'down';
+	const el = epubRender ? epubRender.elementFor(id) : $reader.sentenceMap?.get(id);
+	return narrationDirection(
+		scrollerEl.getBoundingClientRect(),
+		el ? el.getBoundingClientRect() : null,
+		$settings.verticalText
+	);
+}
 
-	/** Re-aim the arrow as the narration moves while the reader is detached. */
-	function handleNarrationScroll() {
-		if (!detached) return;
-		narrationDir = currentNarrationDirection();
-	}
+/** Re-aim the arrow as the narration moves while the reader is detached. */
+function handleNarrationScroll() {
+	if (!detached) return;
+	narrationDir = currentNarrationDirection();
+}
 ```
 
 4. Add the re-aim effect next to the other controller-pushing effects (after the autoHideChrome effect):
 
 ```ts
-	$effect(() => {
-		// Dependencies: the active sentence (audio moved) and the detached
-		// flag (button appeared/disappeared). Reading the store values inside
-		// the effect body is what subscribes the effect to them.
-		$reader.activeSentenceId;
-		if (!detached || !scrollerEl) return;
-		narrationDir = currentNarrationDirection();
-	});
+$effect(() => {
+	// Dependencies: the active sentence (audio moved) and the detached
+	// flag (button appeared/disappeared). Reading the store values inside
+	// the effect body is what subscribes the effect to them.
+	$reader.activeSentenceId;
+	if (!detached || !scrollerEl) return;
+	narrationDir = currentNarrationDirection();
+});
 ```
 
 5. Register the scroll listener in `onMount`, next to the existing `scrollerEl?.addEventListener('click', handleContentLinkClick);` line:
 
 ```ts
-		scrollerEl?.addEventListener('scroll', handleNarrationScroll, { passive: true });
+scrollerEl?.addEventListener('scroll', handleNarrationScroll, { passive: true });
 ```
 
 6. Remove it in `onDestroy`, next to the existing `scrollerEl?.removeEventListener('click', handleContentLinkClick);` line:
 
 ```ts
-		scrollerEl?.removeEventListener('scroll', handleNarrationScroll);
+scrollerEl?.removeEventListener('scroll', handleNarrationScroll);
 ```
 
 7. Replace the button's arrow SVG (lines 2063-2071) with the rotation wrapper:
 
 ```svelte
-					<span
-						class="narration-arrow block"
-						style="transform: rotate({narrationDir === 'up' ? 180 : narrationDir === 'left' ? 90 : narrationDir === 'right' ? -90 : 0}deg)"
-					>
-						<svg
-							class="h-3.5 w-3.5"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-							stroke-width="2"
-						>
-							<path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5" />
-						</svg>
-					</span>
+<span
+	class="narration-arrow block"
+	style="transform: rotate({narrationDir === 'up'
+		? 180
+		: narrationDir === 'left'
+			? 90
+			: narrationDir === 'right'
+				? -90
+				: 0}deg)"
+>
+	<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+		<path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5" />
+	</svg>
+</span>
 ```
 
 (The base SVG points down; the rotation map comes from the plan's Global Constraints. The wrapper is `block` so transform applies.)
@@ -266,9 +270,11 @@ git commit -m "Aim the narration button arrow at where the narration is"
 ### Task 3: Appear animation and arrow transition
 
 **Files:**
+
 - Modify: `src/app.css`
 
 **Interfaces:**
+
 - Consumes: the `narration-arrow` class from Task 2, the button's markup
 - Produces: the one-shot appear animation (`.narration-btn` class on the button) and the arrow's `transform` transition, both disabled under `prefers-reduced-motion`
 
@@ -319,7 +325,8 @@ Append to `src/app.css`:
 In `src/routes/read/[itemId]/+page.svelte`, add `narration-btn` to the Narration button's class list (line ~2060), so the existing classes become:
 
 ```svelte
-					class="narration-btn flex items-center gap-1.5 rounded-full border border-[var(--accent)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--accent)] shadow-[var(--shadow-lg)]"
+class="narration-btn flex items-center gap-1.5 rounded-full border border-[var(--accent)]
+bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--accent)] shadow-[var(--shadow-lg)]"
 ```
 
 - [ ] **Step 4: Verify**
