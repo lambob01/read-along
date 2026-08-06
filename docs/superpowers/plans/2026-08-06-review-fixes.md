@@ -1542,7 +1542,7 @@ git commit -m "Stop unmounted reader pages writing over the next book's audio"
 
 **Files:**
 - Modify: `src/lib/sync/merge.ts:37-48`
-- Test: `src/lib/sync/sync.test.ts` (update two tests, add one)
+- Test: `src/lib/sync/sync.test.ts` (replace two pinning tests)
 
 **Interfaces:**
 - Consumes: `SENTENCE_END_RE` (unchanged)
