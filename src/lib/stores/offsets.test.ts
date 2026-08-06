@@ -76,6 +76,7 @@ describe('offsets store', () => {
 
 	it('survives corrupt storage', () => {
 		localStorage.setItem('reader-offsets', 'not json');
+		offsets.hydrate();
 		expect(offsets.get('book-1')).toBeNull();
 	});
 });
