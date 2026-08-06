@@ -2095,7 +2095,7 @@
 			<div class="absolute right-3 bottom-28 z-40">
 				<button
 					onclick={goToNarration}
-					class="flex items-center gap-1.5 rounded-full border border-[var(--accent)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--accent)] shadow-[var(--shadow-lg)]"
+					class="narration-btn flex items-center gap-1.5 rounded-full border border-[var(--accent)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--accent)] shadow-[var(--shadow-lg)]"
 					title="Scroll back to the line being read (f)"
 				>
 					<span

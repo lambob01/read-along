@@ -355,3 +355,34 @@ blockquote.reader-block {
 [data-readalong='false'] .reader-sentence[data-untimed='true'] {
 	opacity: 1;
 }
+
+/* The Narration button slides in once when it appears — it is conditionally
+   rendered, so the animation re-runs on each appearance and never repeats
+   while it stays visible. */
+@keyframes narration-pop {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+.narration-btn {
+	animation: narration-pop 200ms ease-out;
+}
+
+.narration-arrow {
+	transition: transform 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.narration-btn {
+		animation: none;
+	}
+	.narration-arrow {
+		transition: none;
+	}
+}
