@@ -30,6 +30,7 @@
 	import { loadTextSource, type TextSourceMode } from '$lib/epub/source';
 	import { parseStartParam } from '$lib/reader/startParam';
 	import { createHighlighter, type HighlightHandle } from '$lib/reader/highlight';
+	import { narrationDirection, type NarrationDirection } from '$lib/reader/narrationDirection';
 	import { primeCapture, releaseCapture } from '$lib/anki/capture';
 	import { mineSentence } from '$lib/anki/mine';
 
@@ -66,6 +67,9 @@
 	 * without this the reader is pinned to the last line that did match.
 	 */
 	let detached = $state(false);
+
+	/** Which way the narration lies from the viewport, for the button's arrow. */
+	let narrationDir = $state<NarrationDirection>('down');
 
 	/** EPUB spine, for the table of contents. Empty in subtitle mode. */
 	let epubChapters = $state<EpubChapter[]>([]);
@@ -429,6 +433,15 @@
 		scheduleChromeHide();
 	});
 
+	$effect(() => {
+		// Dependencies: the active sentence (audio moved) and the detached
+		// flag (button appeared/disappeared). Reading the store values inside
+		// the effect body is what subscribes the effect to them.
+		$reader.activeSentenceId;
+		if (!detached || !scrollerEl) return;
+		narrationDir = currentNarrationDirection();
+	});
+
 	// The sheet is a dialog: focus moves in on open and back out on close.
 	$effect(() => {
 		if (showSettings) {
@@ -501,6 +514,7 @@
 		// this app; without this, clicking one (a table of contents, a footnote)
 		// routes here with a chapter filename as the item id and the page dies.
 		scrollerEl?.addEventListener('click', handleContentLinkClick);
+		scrollerEl?.addEventListener('scroll', handleNarrationScroll, { passive: true });
 
 		const restart = $page.url.searchParams.get('restart') === '1';
 		const startParam = parseStartParam($page.url.searchParams.get('at'));
@@ -691,6 +705,29 @@
 	}
 
 	/**
+	 * Where the narration is relative to the viewport, for the button arrow.
+	 * Falls back to the forward direction when the sentence has no mounted
+	 * element or the scroller is missing.
+	 */
+	function currentNarrationDirection(): NarrationDirection {
+		if (!scrollerEl) return $settings.verticalText ? 'left' : 'down';
+		const id = narrationSentenceId();
+		if (id === null) return $settings.verticalText ? 'left' : 'down';
+		const el = epubRender ? epubRender.elementFor(id) : $reader.sentenceMap?.get(id);
+		return narrationDirection(
+			scrollerEl.getBoundingClientRect(),
+			el ? el.getBoundingClientRect() : null,
+			$settings.verticalText
+		);
+	}
+
+	/** Re-aim the arrow as the narration moves while the reader is detached. */
+	function handleNarrationScroll() {
+		if (!detached) return;
+		narrationDir = currentNarrationDirection();
+	}
+
+	/**
 	 * The sentence the narration is at. Falls back to the nearest timed line
 	 * when nothing covers the playhead, which is what keeps unmatched passages
 	 * navigable instead of stranding the text where the highlight went out.
@@ -766,6 +803,7 @@
 		// re-run on an element that already has one.
 		window.removeEventListener('keydown', handleKeyDown);
 		scrollerEl?.removeEventListener('click', handleContentLinkClick);
+		scrollerEl?.removeEventListener('scroll', handleNarrationScroll);
 		// The audio element is a singleton that outlives this page, so the
 		// controllers' listeners have to come off with it.
 		player.getAudioElement()?.removeEventListener('seeked', handleAudioSeeked);
@@ -2060,15 +2098,26 @@
 					class="flex items-center gap-1.5 rounded-full border border-[var(--accent)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--accent)] shadow-[var(--shadow-lg)]"
 					title="Scroll back to the line being read (f)"
 				>
-					<svg
-						class="h-3.5 w-3.5"
-						fill="none"
-						stroke="currentColor"
-						viewBox="0 0 24 24"
-						stroke-width="2"
+					<span
+						class="narration-arrow block"
+						style="transform: rotate({narrationDir === 'up'
+							? 180
+							: narrationDir === 'left'
+								? 90
+								: narrationDir === 'right'
+									? -90
+									: 0}deg)"
 					>
-						<path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5" />
-					</svg>
+						<svg
+							class="h-3.5 w-3.5"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+						>
+							<path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m0 0l-5-5m5 5l5-5" />
+						</svg>
+					</span>
 					Narration
 				</button>
 			</div>
