@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ankiVersion, AnkiError } from '$lib/anki/connect';
+import { ankiVersion, REQUEST_TIMEOUT_MS } from '$lib/anki/connect';
 
 const TARGET = { url: 'http://localhost:8765' };
 
@@ -37,7 +37,7 @@ describe('ankiVersion', () => {
 		);
 
 		const promise = ankiVersion(TARGET);
-		vi.advanceTimersByTime(10_000);
+		vi.advanceTimersByTime(REQUEST_TIMEOUT_MS);
 		await expect(promise).rejects.toMatchObject({ kind: 'unreachable' });
 	});
 });

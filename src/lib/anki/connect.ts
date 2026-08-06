@@ -13,7 +13,7 @@ export const DEFAULT_ANKI_URL = 'http://localhost:8765';
 const ANKI_VERSION = 6;
 
 /** How long to wait for AnkiConnect before declaring it unreachable. */
-const REQUEST_TIMEOUT_MS = 10000;
+export const REQUEST_TIMEOUT_MS = 10000;
 
 export class AnkiError extends Error {
 	constructor(

@@ -25,10 +25,12 @@
 ### Task 1: Normalize CRLF and BOM in cue parsing
 
 **Files:**
+
 - Modify: `src/lib/sync/parse.ts:106-111` (`parseCues`)
 - Test: `src/lib/sync/sync.test.ts` (append a `describe('parseCues line endings')` block)
 
 **Interfaces:**
+
 - Consumes: `parseVTT`, `parseSRT`, `WEBVTT_HEADER` (already in file)
 - Produces: unchanged `parseCues(raw: string): RawCue[]` signature — SRT/VTT files with `\r\n` line endings or a leading BOM now parse as multiple cues instead of collapsing into one garbage cue
 
@@ -104,10 +106,12 @@ git commit -m "Parse CRLF and BOM subtitle files as real cues"
 ### Task 2: Sanitize cloned EPUB content in `cloneForRender`
 
 **Files:**
+
 - Modify: `src/lib/reader/epubRenderer.ts:4-22` (`DROP_ATTRS`, `cloneForRender`)
 - Test: `src/lib/reader/epubRenderer.dom.test.ts` (append a describe block)
 
 **Interfaces:**
+
 - Consumes: existing `setup()` helper pattern at epubRenderer.dom.test.ts:28-35, `renderEpub`, `alignEpubToCues`, `makeDoc`, `makeCues` (all present)
 - Produces: `cloneForRender` no longer copies `on*` attributes or dangerous elements into the live document. No signature changes.
 
@@ -166,7 +170,7 @@ describe('cloneForRender sanitization', () => {
 	});
 ```
 
-Note: `alignEpubToCues` normalizes text that includes `<script>`; the sanitizer runs on the *rendered* clone, so the paragraph still wraps. If `window.pwned` gets set by the script tag during the test's `setup`, the test failing is the point — do not run the existing suite until Step 3.
+Note: `alignEpubToCues` normalizes text that includes `<script>`; the sanitizer runs on the _rendered_ clone, so the paragraph still wraps. If `window.pwned` gets set by the script tag during the test's `setup`, the test failing is the point — do not run the existing suite until Step 3.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -252,11 +256,13 @@ git commit -m "Sanitize executable markup out of cloned EPUB content"
 ### Task 3: Origin-check the ABS proxy target
 
 **Files:**
+
 - Create: `src/lib/abs/proxy-target.ts`
 - Create: `src/lib/abs/proxy-target.test.ts`
 - Modify: `src/routes/abs/[...path]/+server.ts:35-44` (`proxy`)
 
 **Interfaces:**
+
 - Consumes: nothing
 - Produces: `resolveProxyTarget(origin: string, path: string, search: string): URL | null` — returns the target URL when `path` resolves to the same origin as `origin`, otherwise `null`
 
@@ -340,10 +346,10 @@ import { resolveProxyTarget } from '$lib/abs/proxy-target';
 2. Replace the top of `proxy` (lines 40-43):
 
 ```ts
-	const target = resolveProxyTarget(ABS_ORIGIN, params.path, new URL(request.url).search);
-	if (!target) {
-		return new Response(JSON.stringify({ error: 'Bad proxy path' }), { status: 400 });
-	}
+const target = resolveProxyTarget(ABS_ORIGIN, params.path, new URL(request.url).search);
+if (!target) {
+	return new Response(JSON.stringify({ error: 'Bad proxy path' }), { status: 400 });
+}
 ```
 
 3. Delete the now-unused line `const url = new URL(request.url);`.
@@ -365,14 +371,17 @@ git commit -m "Refuse ABS proxy paths that resolve off the configured origin"
 ### Task 4: Reset player state on source change; fix skipForward and bookmark parsing
 
 **Files:**
+
 - Modify: `src/lib/stores/player.ts:60-67` (`loadBookmarks`), `:128-132` (`skipForward`), `:136-143` (`setSrc`)
 - Test: `src/lib/stores/player.test.ts` (replace/extend)
 
 **Interfaces:**
+
 - Consumes: `clampSeek` (already exported), `update` from the store
 - Produces: unchanged public API. Behavior: `setSrc` zeroes `currentTime`/`duration`/`playing` synchronously; `skipForward` passes an unknown duration through; `loadBookmarks` returns `{}` for non-object JSON
 
 **Why (three bugs):**
+
 1. `setSrc` leaves the old book's `currentTime` in the store until the new source's first `timeupdate` — many seconds, or forever if the user never presses play. The reader's bookmark interval and onDestroy save then write book A's position as book B's bookmark.
 2. `skipForward` clamps against `a.duration || 0` — a not-yet-loaded duration (NaN) reads as 0, rewinding to the start. The exact bug `clampSeek`'s comment documents.
 3. `loadBookmarks` parses `'null'` or `'"x"'` successfully, then `bookmarks[itemId]` in `getBookmark` throws a TypeError, crashing the book details page.
@@ -538,20 +547,20 @@ In `src/lib/stores/player.ts`:
 1. Replace `loadBookmarks`:
 
 ```ts
-	function loadBookmarks(): Record<string, number> {
-		if (typeof localStorage === 'undefined') return {};
-		try {
-			const parsed = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
-			// JSON.parse('null') or JSON.parse('"x"') succeed but are not the
-			// object the callers index into; without the shape check,
-			// getBookmark throws a TypeError and the details page dies.
-			return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-				? (parsed as Record<string, number>)
-				: {};
-		} catch {
-			return {};
-		}
+function loadBookmarks(): Record<string, number> {
+	if (typeof localStorage === 'undefined') return {};
+	try {
+		const parsed = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+		// JSON.parse('null') or JSON.parse('"x"') succeed but are not the
+		// object the callers index into; without the shape check,
+		// getBookmark throws a TypeError and the details page dies.
+		return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, number>)
+			: {};
+	} catch {
+		return {};
 	}
+}
 ```
 
 2. Replace `skipForward`:
@@ -600,10 +609,12 @@ git commit -m "Reset player state on source change, fix skipForward and bookmark
 ### Task 5: Guard the connection store against corrupt storage
 
 **Files:**
+
 - Modify: `src/lib/stores/connection.ts:3-16` (`persisted`)
 - Create: `src/lib/stores/connection.test.ts`
 
 **Interfaces:**
+
 - Consumes: `writable` from svelte/store
 - Produces: unchanged `connection` store API; `persisted` falls back to the default on corrupt or non-object JSON
 
@@ -652,7 +663,9 @@ describe('connection store persistence', () => {
 	it('loads a valid stored credential', async () => {
 		vi.stubGlobal(
 			'localStorage',
-			makeLocalStorage({ 'reader-connection': JSON.stringify({ url: '', token: 'abc', connected: true }) })
+			makeLocalStorage({
+				'reader-connection': JSON.stringify({ url: '', token: 'abc', connected: true })
+			})
 		);
 		const { connection } = await import('$lib/stores/connection');
 		expect(get(connection).token).toBe('abc');
@@ -715,10 +728,12 @@ git commit -m "Let the connection store survive corrupt storage"
 ### Task 6: Guard the subtitle download in `loadTextSource`
 
 **Files:**
+
 - Modify: `src/lib/epub/source.ts:38-57` (`loadTextSource` signature + subtitle fetch)
 - Create: `src/lib/epub/source.dom.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ABSClient`, `ItemSources`, `getFileText` (unchanged)
 - Produces: `loadTextSource(client, itemId, sources?, fetchFileText = getFileText)` — the optional last parameter is the test seam; the failure path now returns `{ mode: 'none', ..., notice }` instead of rejecting
 
@@ -780,22 +795,22 @@ export async function loadTextSource(
 2. Replace the unguarded fetch (line 56) with:
 
 ```ts
-	let raw: string;
-	try {
-		raw = await fetchFileText(client, itemId, found.subIno);
-	} catch (err) {
-		return {
-			mode: 'none',
-			doc: null,
-			index: null,
-			cues: null,
-			fromCache: false,
-			notice: `Subtitle could not be downloaded (${
-				err instanceof Error ? err.message : 'unknown error'
-			}); no transcript.`
-		};
-	}
-	const cues = parseCues(raw);
+let raw: string;
+try {
+	raw = await fetchFileText(client, itemId, found.subIno);
+} catch (err) {
+	return {
+		mode: 'none',
+		doc: null,
+		index: null,
+		cues: null,
+		fromCache: false,
+		notice: `Subtitle could not be downloaded (${
+			err instanceof Error ? err.message : 'unknown error'
+		}); no transcript.`
+	};
+}
+const cues = parseCues(raw);
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -815,10 +830,12 @@ git commit -m "Degrade to no-source when the subtitle download fails"
 ### Task 7: Re-derive timing invariants in `rebuildIndex`
 
 **Files:**
+
 - Modify: `src/lib/epub/cache.ts:109-134` (`rebuildIndex`)
 - Test: `src/lib/epub/cache.test.ts` (append a describe block)
 
 **Interfaces:**
+
 - Consumes: `AlignedIndex`, `AlignedSentence` types
 - Produces: unchanged `rebuildIndex(cached: CachedAlignment): AlignedIndex` — but the arrays are now overlap-free and positive-width, matching what `finalize` in `align.ts:382-418` produces, so the doc comment is honest
 
@@ -837,8 +854,32 @@ describe('rebuildIndex invariants', () => {
 			createdAt: 0,
 			blocks: [],
 			sentences: [
-				{ id: 0, timed: true, start: 5, end: 5, text: 'zero', blockId: 0, chapterOrder: 0, streamStart: 0, streamEnd: 0, blockOffsetStart: 0, blockOffsetEnd: 0 },
-				{ id: 1, timed: true, start: 6, end: 8, text: 'real', blockId: 0, chapterOrder: 0, streamStart: 0, streamEnd: 0, blockOffsetStart: 0, blockOffsetEnd: 0 }
+				{
+					id: 0,
+					timed: true,
+					start: 5,
+					end: 5,
+					text: 'zero',
+					blockId: 0,
+					chapterOrder: 0,
+					streamStart: 0,
+					streamEnd: 0,
+					blockOffsetStart: 0,
+					blockOffsetEnd: 0
+				},
+				{
+					id: 1,
+					timed: true,
+					start: 6,
+					end: 8,
+					text: 'real',
+					blockId: 0,
+					chapterOrder: 0,
+					streamStart: 0,
+					streamEnd: 0,
+					blockOffsetStart: 0,
+					blockOffsetEnd: 0
+				}
 			],
 			stats: { totalSentences: 2, timedSentences: 2, coverage: 1, cueCount: 1, matchedCues: 1 }
 		});
@@ -853,8 +894,32 @@ describe('rebuildIndex invariants', () => {
 			createdAt: 0,
 			blocks: [],
 			sentences: [
-				{ id: 0, timed: true, start: 1, end: 10, text: 'a', blockId: 0, chapterOrder: 0, streamStart: 0, streamEnd: 0, blockOffsetStart: 0, blockOffsetEnd: 0 },
-				{ id: 1, timed: true, start: 2, end: 4, text: 'b', blockId: 0, chapterOrder: 0, streamStart: 0, streamEnd: 0, blockOffsetStart: 0, blockOffsetEnd: 0 }
+				{
+					id: 0,
+					timed: true,
+					start: 1,
+					end: 10,
+					text: 'a',
+					blockId: 0,
+					chapterOrder: 0,
+					streamStart: 0,
+					streamEnd: 0,
+					blockOffsetStart: 0,
+					blockOffsetEnd: 0
+				},
+				{
+					id: 1,
+					timed: true,
+					start: 2,
+					end: 4,
+					text: 'b',
+					blockId: 0,
+					chapterOrder: 0,
+					streamStart: 0,
+					streamEnd: 0,
+					blockOffsetStart: 0,
+					blockOffsetEnd: 0
+				}
 			],
 			stats: { totalSentences: 2, timedSentences: 2, coverage: 1, cueCount: 1, matchedCues: 1 }
 		});
@@ -935,11 +1000,13 @@ git commit -m "Re-derive timing invariants when rebuilding cached alignments"
 ### Task 8: Unsubscribe the page-level store subscriptions
 
 **Files:**
+
 - Modify: `src/routes/library/+page.svelte:17-23` + add `onDestroy` import/block
 - Modify: `src/routes/book/[itemId]/+page.svelte:27-30` + add `onDestroy` import/block
 - Modify: `src/routes/read/[itemId]/+page.svelte:160-173` + teardown in the existing `onDestroy` (line 716)
 
 **Interfaces:**
+
 - Consumes: `connection`, `settings` stores (unchanged)
 - Produces: no API changes; subscriptions are torn down on unmount
 
@@ -953,16 +1020,16 @@ In `src/routes/library/+page.svelte`:
 2. Change the subscription block (lines 20-23):
 
 ```ts
-	const unsubConnection = connection.subscribe((s) => {
-		connectionUrl = s.url;
-		connectionToken = s.token;
-	});
+const unsubConnection = connection.subscribe((s) => {
+	connectionUrl = s.url;
+	connectionToken = s.token;
+});
 ```
 
 3. Add at the end of the script (after `filteredItems`):
 
 ```ts
-	onDestroy(unsubConnection);
+onDestroy(unsubConnection);
 ```
 
 - [ ] **Step 2: Book details page**
@@ -973,15 +1040,15 @@ In `src/routes/book/[itemId]/+page.svelte`:
 2. Change the subscription block (lines 28-30):
 
 ```ts
-	const unsubConnection = connection.subscribe((s) => {
-		connectionToken = s.token;
-	});
+const unsubConnection = connection.subscribe((s) => {
+	connectionToken = s.token;
+});
 ```
 
 3. Add near the bottom of the script:
 
 ```ts
-	onDestroy(unsubConnection);
+onDestroy(unsubConnection);
 ```
 
 - [ ] **Step 3: Reader page**
@@ -991,22 +1058,22 @@ In `src/routes/read/[itemId]/+page.svelte`:
 1. Change the subscription block (lines 165-173) to capture the unsubscribers:
 
 ```ts
-	const unsubConnection = connection.subscribe((s) => {
-		connectionToken = s.token;
-		connectionUrl = s.url;
-	});
+const unsubConnection = connection.subscribe((s) => {
+	connectionToken = s.token;
+	connectionUrl = s.url;
+});
 
-	const unsubSettings = settings.subscribe((s) => {
-		gapThreshold = s.gapThreshold;
-		showNonSpeech = s.showNonSpeech;
-	});
+const unsubSettings = settings.subscribe((s) => {
+	gapThreshold = s.gapThreshold;
+	showNonSpeech = s.showNonSpeech;
+});
 ```
 
 2. In the existing `onDestroy` (which starts at line 716), add as its first lines:
 
 ```ts
-		unsubConnection();
-		unsubSettings();
+unsubConnection();
+unsubSettings();
 ```
 
 - [ ] **Step 4: Verify**
@@ -1026,9 +1093,11 @@ git commit -m "Unsubscribe page-level store subscriptions on unmount"
 ### Task 9: Make the reader's settings sheet keyboard accessible
 
 **Files:**
+
 - Modify: `src/routes/read/[itemId]/+page.svelte`
 
 **Interfaces:**
+
 - Consumes: existing `showSettings` state, the settings button (line ~1551), the sheet markup (lines 2081-2119)
 - Produces: the sheet has `aria-modal="true"`, closes on Escape, focuses its close button on open, and returns focus to the settings trigger on close
 
@@ -1039,8 +1108,8 @@ git commit -m "Unsubscribe page-level store subscriptions on unmount"
 In the script, near the other `show*` states (after line 45):
 
 ```ts
-	let settingsCloseBtn = $state<HTMLButtonElement>();
-	let settingsTriggerEl: HTMLElement | null = null;
+let settingsCloseBtn = $state<HTMLButtonElement>();
+let settingsTriggerEl: HTMLElement | null = null;
 ```
 
 - [ ] **Step 2: Wire focus into effects**
@@ -1048,14 +1117,14 @@ In the script, near the other `show*` states (after line 45):
 Add next to the other controller-pushing effects (after the `$effect` at line 417, for example):
 
 ```ts
-	// The sheet is a dialog: focus moves in on open and back out on close.
-	$effect(() => {
-		if (showSettings) {
-			settingsCloseBtn?.focus();
-		} else if (settingsTriggerEl instanceof HTMLElement) {
-			settingsTriggerEl.focus();
-		}
-	});
+// The sheet is a dialog: focus moves in on open and back out on close.
+$effect(() => {
+	if (showSettings) {
+		settingsCloseBtn?.focus();
+	} else if (settingsTriggerEl instanceof HTMLElement) {
+		settingsTriggerEl.focus();
+	}
+});
 ```
 
 - [ ] **Step 3: Capture the trigger element**
@@ -1124,10 +1193,12 @@ git commit -m "Make the reader settings sheet keyboard accessible"
 ### Task 10: Time out AnkiConnect calls
 
 **Files:**
+
 - Modify: `src/lib/anki/connect.ts:31-62` (`invoke`)
 - Create: `src/lib/anki/connect.test.ts`
 
 **Interfaces:**
+
 - Consumes: `AnkiError`, `AnkiTarget` (unchanged)
 - Produces: `invoke` aborts after 10s; an abort surfaces as `AnkiError` with kind `'unreachable'`, the same message users already get for an unreachable Anki
 
@@ -1200,29 +1271,29 @@ const REQUEST_TIMEOUT_MS = 10000;
 Replace the fetch section of `invoke`:
 
 ```ts
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-	let res: Response;
-	try {
-		res = await fetch(target.url, {
-			method: 'POST',
-			// No custom headers: anything beyond a simple request makes the
-			// browser preflight, and AnkiConnect answers OPTIONS only for
-			// origins already in webCorsOriginList.
-			body: JSON.stringify(body),
-			signal: controller.signal
-		});
-	} catch {
-		// An abort and a refused connection are the same failure to the user:
-		// AnkiConnect never answered.
-		throw new AnkiError(
-			`Could not reach Anki at ${target.url}. Check that Anki is open with AnkiConnect installed, and that this site's address is in AnkiConnect's webCorsOriginList.`,
-			'unreachable'
-		);
-	} finally {
-		clearTimeout(timer);
-	}
+let res: Response;
+try {
+	res = await fetch(target.url, {
+		method: 'POST',
+		// No custom headers: anything beyond a simple request makes the
+		// browser preflight, and AnkiConnect answers OPTIONS only for
+		// origins already in webCorsOriginList.
+		body: JSON.stringify(body),
+		signal: controller.signal
+	});
+} catch {
+	// An abort and a refused connection are the same failure to the user:
+	// AnkiConnect never answered.
+	throw new AnkiError(
+		`Could not reach Anki at ${target.url}. Check that Anki is open with AnkiConnect installed, and that this site's address is in AnkiConnect's webCorsOriginList.`,
+		'unreachable'
+	);
+} finally {
+	clearTimeout(timer);
+}
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -1242,14 +1313,16 @@ git commit -m "Time out AnkiConnect requests instead of hanging the Mine button"
 ### Task 11: Cap the length of a mined segment
 
 **Files:**
+
 - Modify: `src/lib/anki/capture.ts` (add `MAX_SEGMENT_SECONDS`, extend `CaptureFailure`, add the check in `captureRange`)
 - Test: `src/lib/anki/capture.test.ts` (append a describe block)
 
 **Interfaces:**
+
 - Consumes: `CaptureError` (unchanged constructor)
 - Produces: `CaptureFailure` gains `'too-long'`; `captureRange` rejects before touching the audio graph when the range exceeds 5 minutes
 
-**Why:** A misaligned book can produce a "sentence" minutes long; the stall timeout only fires when the playhead *stops*, and a line whose end lands hours ahead records hours — ~345 MB for 30 minutes of 48 kHz Float32, a tab crash for longer.
+**Why:** A misaligned book can produce a "sentence" minutes long; the stall timeout only fires when the playhead _stops_, and a line whose end lands hours ahead records hours — ~345 MB for 30 minutes of 48 kHz Float32, a tab crash for longer.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1264,7 +1337,7 @@ describe('captureRange length cap', () => {
 });
 ```
 
-Note: `captureRange` must be checked *before* `audioContext()` is reached, or the node test fails on a missing `AudioContext` instead of the cap. `audioContext()` is called at capture.ts:386, after the empty-range check at :384; insert the cap between them.
+Note: `captureRange` must be checked _before_ `audioContext()` is reached, or the node test fails on a missing `AudioContext` instead of the cap. `audioContext()` is called at capture.ts:386, after the empty-range check at :384; insert the cap between them.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1291,23 +1364,18 @@ const MAX_SEGMENT_SECONDS = 300;
 
 ```ts
 export type CaptureFailure =
-	| 'unavailable'
-	| 'load-failed'
-	| 'stalled'
-	| 'blocked'
-	| 'empty'
-	| 'too-long';
+	'unavailable' | 'load-failed' | 'stalled' | 'blocked' | 'empty' | 'too-long';
 ```
 
 3. Insert the check in `captureRange` between the existing empty-range check and `const c = audioContext();`:
 
 ```ts
-	if (to - from > MAX_SEGMENT_SECONDS) {
-		throw new CaptureError(
-			'too-long',
-			`That line is ${Math.round(to - from)}s long — over the ${MAX_SEGMENT_SECONDS}s mining cap. Check the alignment and try a shorter line.`
-		);
-	}
+if (to - from > MAX_SEGMENT_SECONDS) {
+	throw new CaptureError(
+		'too-long',
+		`That line is ${Math.round(to - from)}s long — over the ${MAX_SEGMENT_SECONDS}s mining cap. Check the alignment and try a shorter line.`
+	);
+}
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -1327,9 +1395,11 @@ git commit -m "Cap mined segments at five minutes"
 ### Task 12: Make the offsets corrupt-storage test real
 
 **Files:**
+
 - Modify: `src/lib/stores/offsets.test.ts:77-80`
 
 **Interfaces:**
+
 - Consumes: `offsets.hydrate()` (already public)
 - Produces: no production changes — the test now exercises the corrupt-storage path it claims to cover
 
@@ -1340,11 +1410,11 @@ git commit -m "Cap mined segments at five minutes"
 Replace the `survives corrupt storage` test (lines 77-80):
 
 ```ts
-	it('survives corrupt storage', () => {
-		localStorage.setItem('reader-offsets', 'not json');
-		offsets.hydrate();
-		expect(offsets.get('book-1')).toBeNull();
-	});
+it('survives corrupt storage', () => {
+	localStorage.setItem('reader-offsets', 'not json');
+	offsets.hydrate();
+	expect(offsets.get('book-1')).toBeNull();
+});
 ```
 
 - [ ] **Step 2: Run the test**
@@ -1364,12 +1434,14 @@ git commit -m "Exercise the corrupt-storage path in the offsets store test"
 ### Task 13: Remove the dead server-URL field from the connection screen
 
 **Files:**
+
 - Modify: `src/routes/+page.svelte` (form + `handleConnect`)
 - Modify: `src/lib/stores/connection.ts` (`connect` signature)
 - Modify: `src/routes/library/+page.svelte` (gate)
 - Modify: `src/routes/read/[itemId]/+page.svelte` (dead `connectionUrl` assignment)
 
 **Interfaces:**
+
 - Consumes: `connection.connect` call sites (grep: only `src/routes/+page.svelte:58`)
 - Produces: `connection.connect(token: string)` — the persisted `url` field stays in the state shape (backwards-compatible storage) but is always `''`
 
@@ -1427,14 +1499,17 @@ git commit -m "Drop the dead server-URL field from the connection screen"
 ### Task 14: Guard the reader's async onMount against unmount; report missing audio
 
 **Files:**
+
 - Modify: `src/routes/read/[itemId]/+page.svelte` (onMount ~476-593, onDestroy ~716-756, notice markup ~1622-1639)
 
 **Interfaces:**
+
 - Consumes: existing `player`, `reader`, `contentEl`, `sourceNotice` state
 - Produces: a `disposed` flag checked after every await in `onMount`; a `noAudioNotice` state shown when the stream session has no track; `player.setSrc('')` stops a stale book's audio when the new one has none
 
 **Why (two bugs):**
-1. Nothing in the async `onMount` checks that the component is still mounted. Navigate away while `getItem`/`getStreamSession`/`loadTextSource` is in flight and the continuation runs after `onDestroy`: `player.setSrc` overwrites the *next* book's audio, and `reader.setCueIndex` repopulates the store after `reader.reset()`.
+
+1. Nothing in the async `onMount` checks that the component is still mounted. Navigate away while `getItem`/`getStreamSession`/`loadTextSource` is in flight and the continuation runs after `onDestroy`: `player.setSrc` overwrites the _next_ book's audio, and `reader.setCueIndex` repopulates the store after `reader.reset()`.
 2. When `directTrack?.contentUrl` is missing there is no error and no notice: the page renders a play button that does nothing, and a stale previous book's audio keeps playing — whose position then gets recorded under this book's id on destroy.
 
 - [ ] **Step 1: Add the flag and the notice state**
@@ -1442,10 +1517,10 @@ git commit -m "Drop the dead server-URL field from the connection screen"
 Near the other `let` state (after line 158):
 
 ```ts
-	/** Set when the page is torn down; every await in onMount must bail on it. */
-	let disposed = false;
-	/** The stream session exists but has no audio track. */
-	let noAudioNotice = $state(false);
+/** Set when the page is torn down; every await in onMount must bail on it. */
+let disposed = false;
+/** The stream session exists but has no audio track. */
+let noAudioNotice = $state(false);
 ```
 
 - [ ] **Step 2: Set the flag in onDestroy**
@@ -1465,33 +1540,33 @@ In `onMount` (lines 476-593), after each of these, add the guard:
 1. After `const item = await getItem(client, itemId);`:
 
 ```ts
-			if (disposed) return;
-			reader.setItem(item);
+if (disposed) return;
+reader.setItem(item);
 ```
 
 2. After `const session = await getStreamSession(client, itemId);`, insert the guard FIRST — before any `setSrc` — then replace the `audioSrc` block:
 
 ```ts
-			if (disposed) return;
-			const directTrack = session.libraryItem?.media?.tracks?.[0];
-			const audioSrc = directTrack?.contentUrl;
-			if (audioSrc) {
-				const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
-				player.setSrc(src);
-				const bookmark = restart ? 0 : (player.getBookmark(itemId) ?? 0);
-				// Waits for metadata rather than guessing at a delay: 500ms was
-				// enough on a local file and nowhere near enough for a long book
-				// over a remote connection, where the seek landed before the
-				// element knew its duration and was discarded.
-				if (bookmark > 0) player.seekWhenReady(bookmark);
-			} else {
-				// No track: stop whatever the previous book left playing on the
-				// singleton element, or its position gets bookmarked under this
-				// book's id on destroy. setSrc('') also zeroes the store's
-				// currentTime, which the destroy guard relies on.
-				player.setSrc('');
-				noAudioNotice = true;
-			}
+if (disposed) return;
+const directTrack = session.libraryItem?.media?.tracks?.[0];
+const audioSrc = directTrack?.contentUrl;
+if (audioSrc) {
+	const src = `/abs${audioSrc}?token=${encodeURIComponent(connectionToken)}`;
+	player.setSrc(src);
+	const bookmark = restart ? 0 : (player.getBookmark(itemId) ?? 0);
+	// Waits for metadata rather than guessing at a delay: 500ms was
+	// enough on a local file and nowhere near enough for a long book
+	// over a remote connection, where the seek landed before the
+	// element knew its duration and was discarded.
+	if (bookmark > 0) player.seekWhenReady(bookmark);
+} else {
+	// No track: stop whatever the previous book left playing on the
+	// singleton element, or its position gets bookmarked under this
+	// book's id on destroy. setSrc('') also zeroes the store's
+	// currentTime, which the destroy guard relies on.
+	player.setSrc('');
+	noAudioNotice = true;
+}
 ```
 
 (The guard must precede the block: a continuation that resolves after the user has moved on would otherwise write this book's `setSrc` over the next book's audio before the check could stop it.)
@@ -1499,14 +1574,14 @@ In `onMount` (lines 476-593), after each of these, add the guard:
 3. After `source = await loadTextSource(client, itemId);` (the try/catch at lines 527-532), add inside the try, right after the assignment:
 
 ```ts
-				source = await loadTextSource(client, itemId);
-				if (disposed) return;
+source = await loadTextSource(client, itemId);
+if (disposed) return;
 ```
 
 4. Inside both `requestAnimationFrame` callbacks (lines 555 and 578), change the guard to:
 
 ```ts
-				if (disposed || !contentEl) return;
+if (disposed || !contentEl) return;
 ```
 
 - [ ] **Step 4: Show the notice**
@@ -1541,14 +1616,16 @@ git commit -m "Stop unmounted reader pages writing over the next book's audio"
 ### Task 15: Absorb a terminated cue into its running sentence
 
 **Files:**
+
 - Modify: `src/lib/sync/merge.ts:37-48`
 - Test: `src/lib/sync/sync.test.ts` (replace two pinning tests)
 
 **Interfaces:**
+
 - Consumes: `SENTENCE_END_RE` (unchanged)
 - Produces: unchanged `mergeCues` signature. Behavior change: a cue whose final punctuation lands mid-utterance (cue A unpunctuated, cue B punctuated) merges into one sentence instead of leaving the opening as a fragment
 
-**Why:** A cue ending in `.`/`。` always started a new sentence even when it was the *end* of the current utterance ("長い文章が" + "分かれています。" produced a fragment "長い文章が" as its own sentence). The merge stops on the merged text's own punctuation anyway (line 39), so the `nextCue` check only ever produces fragments.
+**Why:** A cue ending in `.`/`。` always started a new sentence even when it was the _end_ of the current utterance ("長い文章が" + "分かれています。" produced a fragment "長い文章が" as its own sentence). The merge stops on the merged text's own punctuation anyway (line 39), so the `nextCue` check only ever produces fragments.
 
 - [ ] **Step 1: Update the two pinning tests**
 
@@ -1557,30 +1634,30 @@ In `src/lib/sync/sync.test.ts`:
 1. Replace the `does not absorb a terminated cue into a running sentence` test (lines 265-278) with:
 
 ```ts
-	it('absorbs a terminated cue into its running sentence', () => {
-		// The final cue carries the 。 for the whole utterance; it used to be
-		// split off on its own, leaving the opening as a fragment sentence.
-		const cues: RawCue[] = [
-			{ index: 0, start: 0, end: 1, text: '長い文章が' },
-			{ index: 1, start: 1, end: 2, text: '分かれています。' }
-		];
-		const sentences = mergeCues(cues)[0].sentences;
+it('absorbs a terminated cue into its running sentence', () => {
+	// The final cue carries the 。 for the whole utterance; it used to be
+	// split off on its own, leaving the opening as a fragment sentence.
+	const cues: RawCue[] = [
+		{ index: 0, start: 0, end: 1, text: '長い文章が' },
+		{ index: 1, start: 1, end: 2, text: '分かれています。' }
+	];
+	const sentences = mergeCues(cues)[0].sentences;
 
-		expect(sentences).toHaveLength(1);
-		expect(sentences[0].text).toBe('長い文章が 分かれています。');
-	});
+	expect(sentences).toHaveLength(1);
+	expect(sentences[0].text).toBe('長い文章が 分かれています。');
+});
 ```
 
 2. Replace the `assigns correct cueIds to merged sentences` test (lines 280-287) with:
 
 ```ts
-	it('assigns correct cueIds to merged sentences', () => {
-		const cues = makeCues('Hello', 'world', 'today.');
-		const paragraphs = mergeCues(cues);
-		const sentences = paragraphs[0].sentences;
-		expect(sentences).toHaveLength(1);
-		expect(sentences[0].cueIds).toEqual([0, 1, 2]);
-	});
+it('assigns correct cueIds to merged sentences', () => {
+	const cues = makeCues('Hello', 'world', 'today.');
+	const paragraphs = mergeCues(cues);
+	const sentences = paragraphs[0].sentences;
+	expect(sentences).toHaveLength(1);
+	expect(sentences[0].cueIds).toEqual([0, 1, 2]);
+});
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1616,21 +1693,21 @@ const DIALOGUE_START_RE = /^[-—]/;
 And in the inner while loop (lines 37-48), remove the `nextCue` punctuation break and add a break for a run that started with non-speech:
 
 ```ts
-		while (cueIdx + 1 < filtered.length) {
-			const nextCue = filtered[cueIdx + 1];
-			if (SENTENCE_END_RE.test(mergedText.trimEnd())) break;
-			// A run that started with a non-speech cue stays on its own: the
-			// point of showNonSpeech is seeing [music] lines separately, and
-			// the nextCue guard below keeps speech from absorbing them.
-			if (isNonSpeech(mergedText.trim())) break;
-			if (isNonSpeech(nextCue.text)) break;
-			const gap = nextCue.start - mergedEnd;
-			if (gap > gapThreshold) break;
-			mergedText += ' ' + nextCue.text;
-			mergedEnd = nextCue.end;
-			mergedCueIds.push(nextCue.index);
-			cueIdx++;
-		}
+while (cueIdx + 1 < filtered.length) {
+	const nextCue = filtered[cueIdx + 1];
+	if (SENTENCE_END_RE.test(mergedText.trimEnd())) break;
+	// A run that started with a non-speech cue stays on its own: the
+	// point of showNonSpeech is seeing [music] lines separately, and
+	// the nextCue guard below keeps speech from absorbing them.
+	if (isNonSpeech(mergedText.trim())) break;
+	if (isNonSpeech(nextCue.text)) break;
+	const gap = nextCue.start - mergedEnd;
+	if (gap > gapThreshold) break;
+	mergedText += ' ' + nextCue.text;
+	mergedEnd = nextCue.end;
+	mergedCueIds.push(nextCue.index);
+	cueIdx++;
+}
 ```
 
 Note: `shows non-speech when option is set` ([music] + Hello., showNonSpeech) must STILL produce 2 sentences — the new non-speech-start break is what keeps it that way while the fragment case merges.
@@ -1638,7 +1715,7 @@ Note: `shows non-speech when option is set` ([music] + Hello., showNonSpeech) mu
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/lib/sync/sync.test.ts`
-Expected: all tests PASS, including `splits Japanese sentences on 。`, `splits on fullwidth ！ and ？`, `treats a closing bracket as terminal`, `does not merge sentences ending with punctuation` (these all end their *first* cue in punctuation, which the line-39 break still splits), and `shows non-speech when option is set` (kept at 2 sentences by the non-speech-start break).
+Expected: all tests PASS, including `splits Japanese sentences on 。`, `splits on fullwidth ！ and ？`, `treats a closing bracket as terminal`, `does not merge sentences ending with punctuation` (these all end their _first_ cue in punctuation, which the line-39 break still splits), and `shows non-speech when option is set` (kept at 2 sentences by the non-speech-start break).
 
 - [ ] **Step 5: Commit**
 
@@ -1652,11 +1729,13 @@ git commit -m "Merge a terminated cue into its running sentence"
 ### Task 16: SettingsPanel smoke test + named micro test gaps
 
 **Files:**
+
 - Create: `src/lib/components/settings-panel.svelte.test.ts`
 - Modify: `src/lib/sync/repeat.test.ts` (append one test)
 - Modify: `src/lib/sync/ticker.dom.test.ts` (append one test)
 
 **Interfaces:**
+
 - Consumes: `mount`/`flushSync` from `svelte`, `settings` store (module singleton — dynamic import after stubbing localStorage), `SettingsPanel` props `{ showSubtitleOptions }`
 - Produces: pinned behavior for (a) the reader's most regressible UI component, (b) repeat units with duplicate end times, (c) the ticker's `seek` method
 
@@ -1704,7 +1783,10 @@ describe('SettingsPanel', () => {
 		expect(epubHost.querySelector('#gap-threshold')).toBeNull();
 
 		const subtitleHost = document.createElement('div');
-		mount(SettingsPanel, { target: subtitleHost, props: { showSubtitleOptions: true, only: 'sync' } });
+		mount(SettingsPanel, {
+			target: subtitleHost,
+			props: { showSubtitleOptions: true, only: 'sync' }
+		});
 		flushSync();
 		expect(subtitleHost.querySelector('#gap-threshold')).not.toBeNull();
 	});

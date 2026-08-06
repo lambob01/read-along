@@ -1674,7 +1674,11 @@
 				<div class="reader-notice flex items-center justify-center py-12">
 					<div class="text-center">
 						<p class="text-lg text-[var(--muted)]">No transcript available for this item</p>
-						<p class="mt-2 text-sm text-[var(--muted)]">Press play to listen to the audiobook.</p>
+						<p class="mt-2 text-sm text-[var(--muted)]">
+							{noAudioNotice
+								? 'No audio track was found for this item; you can still read the text.'
+								: 'Press play to listen to the audiobook.'}
+						</p>
 					</div>
 				</div>
 			{:else}
