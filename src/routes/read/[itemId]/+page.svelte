@@ -162,12 +162,12 @@
 	let gapThreshold = defaultSettings.gapThreshold;
 	let showNonSpeech = defaultSettings.showNonSpeech;
 
-	connection.subscribe((s) => {
+	const unsubConnection = connection.subscribe((s) => {
 		connectionToken = s.token;
 		connectionUrl = s.url;
 	});
 
-	settings.subscribe((s) => {
+	const unsubSettings = settings.subscribe((s) => {
 		gapThreshold = s.gapThreshold;
 		showNonSpeech = s.showNonSpeech;
 	});
@@ -714,6 +714,8 @@
 	}
 
 	onDestroy(() => {
+		unsubConnection();
+		unsubSettings();
 		// Only a page that actually loaded its item may record a position. The
 		// audio element is a singleton that keeps playing whatever the previous
 		// book had, so a failed page (a link inside the EPUB routed here with a

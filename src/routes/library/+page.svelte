@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { connection } from '$lib/stores/connection';
 	import { recent, type RecentBook } from '$lib/stores/recent';
@@ -17,7 +17,7 @@
 	let connectionUrl = '';
 	let connectionToken = '';
 
-	connection.subscribe((s) => {
+	const unsubConnection = connection.subscribe((s) => {
 		connectionUrl = s.url;
 		connectionToken = s.token;
 	});
@@ -96,6 +96,8 @@
 			return title.includes(q) || author.includes(q);
 		});
 	});
+
+	onDestroy(unsubConnection);
 </script>
 
 <div class="min-h-screen bg-[var(--bg)]">
