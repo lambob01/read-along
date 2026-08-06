@@ -26,16 +26,17 @@ describe('SettingsPanel', () => {
 		// `vi.resetModules()` re-executes the svelte client runtime, and a
 		// `mount` from the pre-reset copy would never initialise the one the
 		// component renders with.
-		const { mount, flushSync } = await import('svelte');
 		const { default: SettingsPanel } = await import('./SettingsPanel.svelte');
+		const { mount, flushSync } = await import('svelte');
 
+		// Both mounts pin `only: 'sync'` — #gap-threshold lives in the sync
+		// section, and the component defaults to the appearance tab, so without
+		// pinning the tab the assertion would pass for the wrong reason.
 		const epubHost = document.createElement('div');
-		mount(SettingsPanel, { target: epubHost, props: { showSubtitleOptions: false } });
+		mount(SettingsPanel, { target: epubHost, props: { showSubtitleOptions: false, only: 'sync' } });
 		flushSync();
 		expect(epubHost.querySelector('#gap-threshold')).toBeNull();
 
-		// Gap threshold lives in the sync section, so pin that tab (the
-		// default would be the appearance tab).
 		const subtitleHost = document.createElement('div');
 		mount(SettingsPanel, {
 			target: subtitleHost,
@@ -46,8 +47,8 @@ describe('SettingsPanel', () => {
 	});
 
 	it('writes a control change into the settings store', async () => {
-		const { mount, flushSync } = await import('svelte');
 		const { default: SettingsPanel } = await import('./SettingsPanel.svelte');
+		const { mount, flushSync } = await import('svelte');
 		const { settings } = await import('$lib/stores/settings');
 		const { get } = await import('svelte/store');
 
