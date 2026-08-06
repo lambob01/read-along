@@ -278,16 +278,23 @@
 					</h2>
 					<ol class="mt-3 divide-y divide-[var(--border)]">
 						{#each visibleChapters as ch, i}
-							<li class="flex items-baseline gap-3 py-2">
-								<span class="w-6 shrink-0 text-xs text-[var(--muted)] tabular-nums">
-									{i + 1}
-								</span>
-								<span class="min-w-0 flex-1 truncate text-sm text-[var(--fg)]">
-									{ch.title}
-								</span>
-								<span class="shrink-0 text-xs text-[var(--muted)] tabular-nums">
-									{formatTimestamp(ch.start)}
-								</span>
+							<li>
+								<button
+									onclick={() => goto(`/read/${itemId}?at=${ch.start}`)}
+									class="flex w-full items-baseline gap-3 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
+									aria-label={`Jump to chapter ${i + 1}: ${ch.title}`}
+									title={`Jump to chapter ${i + 1}`}
+								>
+									<span class="w-6 shrink-0 text-xs text-[var(--muted)] tabular-nums">
+										{i + 1}
+									</span>
+									<span class="min-w-0 flex-1 truncate text-sm text-[var(--fg)]">
+										{ch.title}
+									</span>
+									<span class="shrink-0 text-xs text-[var(--muted)] tabular-nums">
+										{formatTimestamp(ch.start)}
+									</span>
+								</button>
 							</li>
 						{/each}
 					</ol>
