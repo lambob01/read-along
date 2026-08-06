@@ -139,4 +139,47 @@ describe('player store', () => {
 		player.saveBookmark('book-1', 123.5);
 		expect(player.getBookmark('book-1')).toBe(123.5);
 	});
+
+	it('setPosition seeds the display position before metadata loads', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		player.setSrc('book-a.mp3');
+		player.setPosition(612.5, 3600);
+
+		const s = get(player);
+		expect(s.currentTime).toBe(612.5);
+		expect(s.duration).toBe(3600);
+	});
+
+	it('setPosition clamps to the seeded duration', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		player.setPosition(9999, 3600);
+
+		expect(get(player).currentTime).toBe(3600);
+	});
+
+	it('setPosition keeps the current duration when none is given', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		player.setPosition(30, 3600);
+		player.setPosition(60);
+
+		const s = get(player);
+		expect(s.currentTime).toBe(60);
+		expect(s.duration).toBe(3600);
+	});
+
+	it('setPosition rejects an unusable duration', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		player.setPosition(30, NaN);
+		player.setPosition(60, -5);
+
+		expect(get(player).duration).toBe(0);
+	});
 });

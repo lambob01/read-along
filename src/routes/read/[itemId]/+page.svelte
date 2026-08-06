@@ -156,6 +156,13 @@
 
 	/** Which text source is driving the view. */
 	let textMode = $state<TextSourceMode>('none');
+	/**
+	 * Where playback is heading once the audio finishes loading: the resume
+	 * bookmark or the `?at=` chapter target, known at mount even though the
+	 * element cannot seek until metadata arrives. The text is positioned at
+	 * this time immediately; the seeked event re-aims when it lands.
+	 */
+	let loadTarget: number | null = null;
 	/** Fraction of the book that received timing, when in EPUB mode. */
 	let coverage = $state<number | null>(null);
 	/** Full alignment result, for the sync report. */
@@ -544,7 +551,16 @@
 				// enough on a local file and nowhere near enough for a long book
 				// over a remote connection, where the seek landed before the
 				// element knew its duration and was discarded.
-				if (bookmark > 0) player.seekWhenReady(bookmark);
+				if (bookmark > 0) {
+					loadTarget = bookmark;
+					player.seekWhenReady(bookmark);
+					// The element cannot move until metadata arrives, but the
+					// transport can: seeding the store with the resume target
+					// (and the API-known duration) keeps the seek bar and the
+					// progress strip honest during the load, when the reader's
+					// text is already being positioned at the target.
+					player.setPosition(bookmark, item.media?.duration);
+				}
 			} else {
 				// No track: stop whatever the previous book left playing on the
 				// singleton element, or its position gets bookmarked under this
@@ -688,10 +704,30 @@
 			);
 		}
 
-		// Open on the narration rather than on chapter one: the bookmark has
-		// usually been restored by now, and if it has not, the `seeked` it
-		// arrives on will bring the text along.
-		if ($settings.readAlong) goToNarration();
+		// Open on the narration rather than on chapter one. With a resume or
+		// chapter target known, position the text at that sentence right away:
+		// the audio element is still at zero until metadata loads, so reading
+		// the playhead would land on chapter one every time and then jump when
+		// the seeked event finally arrives. Without a target, fall back to the
+		// playhead as before.
+		if ($settings.readAlong) {
+			if (loadTarget !== null && loadTarget > 0) {
+				const i = cueIndexAt(timingIndex, loadTarget);
+				const id = i >= 0 ? (timingIndex.sentences[i]?.id ?? null) : null;
+				if (id !== null) {
+					detached = false;
+					autoScroller?.resume();
+					epubRender?.ensureVisible(id);
+					// After the mount, not during: the chapter it just added
+					// has to be laid out before there is anything to scroll to.
+					requestAnimationFrame(() => autoScroller?.scrollTo(id));
+				} else {
+					goToNarration();
+				}
+			} else {
+				goToNarration();
+			}
+		}
 	}
 
 	/**

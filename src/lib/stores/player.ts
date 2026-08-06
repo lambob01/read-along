@@ -139,6 +139,27 @@ function createPlayerStore() {
 		setChapter(n: number) {
 			update((s) => ({ ...s, chapter: n }));
 		},
+		/**
+		 * Seeds the displayed position before the media loads.
+		 *
+		 * Until `loadedmetadata` the element knows nothing, so the store — and
+		 * with it the seek bar and progress strip — would show the start of
+		 * the book while `seekWhenReady` waits for a remote file to answer.
+		 * The resume target is known at mount, so it is displayed immediately;
+		 * nothing overwrites it, because neither `timeupdate` nor
+		 * `durationchange` can fire before metadata arrives. The real values
+		 * replace it when they do.
+		 */
+		setPosition(time: number, duration?: number) {
+			update((s) => ({
+				...s,
+				currentTime: clampSeek(time, duration ?? s.duration),
+				duration:
+					typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+						? duration
+						: s.duration
+			}));
+		},
 		setSrc(url: string) {
 			currentSrc = url;
 			// The store keeps the previous book's position until the new
