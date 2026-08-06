@@ -1,4 +1,5 @@
 import { PUBLIC_ABS_ORIGIN } from '$env/static/public';
+import { resolveProxyTarget } from '$lib/abs/proxy-target';
 import { env } from '$env/dynamic/private';
 import { ProxyAgent } from 'undici';
 import type { Dispatcher } from 'undici';
@@ -37,10 +38,10 @@ async function proxy(
 	params: { path: string },
 	method: string
 ): Promise<Response> {
-	const path = params.path;
-	const target = new URL(`/${path}`, ABS_ORIGIN);
-	const url = new URL(request.url);
-	target.search = url.search;
+	const target = resolveProxyTarget(ABS_ORIGIN, params.path, new URL(request.url).search);
+	if (!target) {
+		return new Response(JSON.stringify({ error: 'Bad proxy path' }), { status: 400 });
+	}
 
 	const init: RequestInit = {
 		method,
