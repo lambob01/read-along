@@ -106,8 +106,13 @@ docker compose up -d --build
 
 Update with `git pull && docker compose up -d --build`.
 
-For local development the equivalent is `PUBLIC_ABS_ORIGIN`, which is what the
-Vite dev proxy forwards to.
+`docker-compose.prod.yml` is the pull-only variant for a home server: it runs
+the image CI pushes to ghcr.io and lets Watchtower apply new pushes
+automatically. Copy `.env.prod.example` to `.env`, then bring it up with
+`docker compose -f docker-compose.prod.yml up -d`.
+
+For local development the equivalent of `ABS_ORIGIN` is `PUBLIC_ABS_ORIGIN`,
+which is what the dev server's `/abs/*` endpoint forwards to.
 
 ## Anki mining
 

@@ -1,10 +1,13 @@
 node_modules
 .svelte-kit
 build
-.env
-.env.local
+# No env file belongs in the image: the Dockerfile sets PUBLIC_ABS_ORIGIN
+# itself, and the deployed container reads SITE_DOMAIN/ABS_ORIGIN at run time.
+# (.env.example is documentation and is not read by the build either.)
+.env*
 Dockerfile
 docker-compose.yml
+docker-compose.prod.yml
 README.md
 .git
 .gitignore

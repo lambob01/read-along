@@ -1,0 +1,63 @@
+# Home-server stack: pulls the prebuilt image from ghcr.io and keeps it current.
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# The sibling docker-compose.yml is the local `build: .` version for development
+# on your laptop. This file never builds anything.
+
+services:
+  reader:
+    image: ghcr.io/lambob01/read-along:latest
+    container_name: reader
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      # Caddy uses this as the site address. A real domain you own gets an
+      # automatic Let's Encrypt certificate; see .env.prod.example.
+      - SITE_DOMAIN=${SITE_DOMAIN:-reader.localhost}
+      # Container-to-container, so this is Audiobookshelf's *internal* port
+      # (usually 80), not the 13378 you publish on the host.
+      - ABS_ORIGIN=${ABS_ORIGIN:-http://audiobookshelf:80}
+    volumes:
+      # Holds the TLS certificates. Without this volume Caddy re-issues on every
+      # update and will hit Let's Encrypt's rate limit.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - default
+      - abs
+    labels:
+      # Watchtower is in label-enabled mode below, so it updates this container
+      # and ignores everything else running on the server.
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    # Pinned: an unpinned watchtower can update itself into a breaking change
+    # on a server you are not watching.
+    image: containrrr/watchtower:1.7.1
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Opt-in per container, via the label on `reader` above.
+      - WATCHTOWER_LABEL_ENABLE=true
+      # Seconds between checks. 300 = new push is live within ~5 minutes.
+      - WATCHTOWER_POLL_INTERVAL=300
+      # Delete the superseded image so the disk does not fill up over months.
+      - WATCHTOWER_CLEANUP=true
+
+networks:
+  # Audiobookshelf's existing network, joined so Caddy can reach it by
+  # container name with no IP to hardcode. Set ABS_NETWORK to its real name —
+  # `docker network ls` will show it. Compose fails loudly if it is wrong,
+  # which is the point: the alternative is a silently unreachable /abs proxy.
+  abs:
+    external: true
+    name: ${ABS_NETWORK:-audiobookshelf_default}
+
+volumes:
+  caddy_data:
+  caddy_config:

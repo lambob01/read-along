@@ -36,7 +36,12 @@ export default defineConfig({
 				test: {
 					name: 'dom',
 					environment: 'jsdom',
-					include: ['src/**/*.dom.{test,spec}.{js,ts}']
+					include: ['src/**/*.dom.{test,spec}.{js,ts}'],
+					// Excludes are the other project's suffix, so a test can only
+					// ever run once: a `.dom.svelte.test.ts` name belongs to
+					// `svelte`, which adds the browser resolve conditions those
+					// tests need.
+					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
 			},
 			{
@@ -50,7 +55,8 @@ export default defineConfig({
 				test: {
 					name: 'svelte',
 					environment: 'jsdom',
-					include: ['src/**/*.svelte.{test,spec}.{js,ts}']
+					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+					exclude: ['src/**/*.dom.{test,spec}.{js,ts}']
 				}
 			}
 		]

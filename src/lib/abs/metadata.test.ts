@@ -60,6 +60,12 @@ describe('toBookDetails', () => {
 		const d = toBookDetails({ media: { metadata: { genres: ['Sci-Fi', null, 7] } } });
 		expect(d.genres).toEqual(['Sci-Fi']);
 	});
+
+	it('treats explicit as a boolean, not a truthy string', () => {
+		expect(toBookDetails({ media: { metadata: { explicit: 'false' } } }).explicit).toBe(false);
+		expect(toBookDetails({ media: { metadata: { explicit: true } } }).explicit).toBe(true);
+		expect(toBookDetails({ media: { metadata: { explicit: 'true' } } }).explicit).toBe(true);
+	});
 });
 
 describe('formatDuration', () => {
@@ -67,6 +73,13 @@ describe('formatDuration', () => {
 		expect(formatDuration(3600)).toBe('1 hr');
 		expect(formatDuration(5400)).toBe('1 hr 30 min');
 		expect(formatDuration(600)).toBe('10 min');
+	});
+
+	it('rounds to whole minutes before splitting them into hours', () => {
+		// 3599s rounds to 60 minutes, which is 1 hr — not "60 min", and the
+		// carried minute must not reappear as "1 hr 60 min" either.
+		expect(formatDuration(3599)).toBe('1 hr');
+		expect(formatDuration(86399)).toBe('24 hr');
 	});
 
 	it('reports unknown for missing duration', () => {
@@ -96,6 +109,14 @@ describe('descriptionToParagraphs', () => {
 
 	it('collapses whitespace within a paragraph', () => {
 		expect(descriptionToParagraphs('a   b\n c')).toEqual(['a b c']);
+	});
+
+	it('decodes named and numeric HTML entities', () => {
+		expect(descriptionToParagraphs('<p>Tom &amp; Jerry &mdash; &quot;fine&quot;</p>')).toEqual([
+			'Tom & Jerry — "fine"'
+		]);
+		expect(descriptionToParagraphs('caf&#233; &#x2014; noir')).toEqual(['café — noir']);
+		expect(descriptionToParagraphs('a&nbsp;b')).toEqual(['a b']);
 	});
 
 	it('returns empty for missing description', () => {

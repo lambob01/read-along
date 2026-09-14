@@ -34,13 +34,72 @@ function firstString(...values: unknown[]): string | null {
 	return null;
 }
 
-function collectFiles(item: any): any[] {
+/**
+ * `collectFiles` is shared with `api.ts`, which needs the same file objects to
+ * locate the EPUB and subtitle attachments.
+ */
+export function collectFiles(item: any): any[] {
 	return [
 		...(item?.media?.audioFiles || []),
 		...(item?.media?.libraryFiles || []),
 		...(item?.media?.tracks || []),
 		...(item?.libraryFiles || [])
 	];
+}
+
+/**
+ * Entities Audiobookshelf descriptions use, decoded without a dependency.
+ * This runs in Node as well as the browser, so `DOMParser` (or a textarea) is
+ * not available, and a library for the dozen entities that actually appear is
+ * not worth the bytes.
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+	amp: '&',
+	lt: '<',
+	gt: '>',
+	quot: '"',
+	apos: "'",
+	nbsp: ' ',
+	mdash: '—',
+	ndash: '–',
+	hellip: '…',
+	lsquo: '‘',
+	rsquo: '’',
+	ldquo: '“',
+	rdquo: '”',
+	laquo: '«',
+	raquo: '»',
+	middot: '·',
+	bull: '•',
+	times: '×',
+	divide: '÷',
+	plusmn: '±',
+	deg: '°',
+	copy: '©',
+	reg: '®',
+	trade: '™',
+	sect: '§',
+	para: '¶',
+	euro: '€',
+	pound: '£',
+	yen: '¥',
+	frac12: '½',
+	frac14: '¼',
+	frac34: '¾'
+};
+
+function decodeEntities(text: string): string {
+	return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (match, entity: string) => {
+		if (entity.startsWith('#')) {
+			const code =
+				entity[1]?.toLowerCase() === 'x'
+					? parseInt(entity.slice(2), 16)
+					: parseInt(entity.slice(1), 10);
+			if (!Number.isInteger(code) || code <= 0 || code > 0x10ffff) return match;
+			return String.fromCodePoint(code);
+		}
+		return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
+	});
 }
 
 export function toBookDetails(item: any): BookDetails {
@@ -72,7 +131,7 @@ export function toBookDetails(item: any): BookDetails {
 		duration: Number(item?.media?.duration ?? 0) || 0,
 		chapterCount: Array.isArray(item?.media?.chapters) ? item.media.chapters.length : 0,
 		sizeBytes: Number(item?.size ?? item?.media?.size ?? 0) || null,
-		explicit: Boolean(meta.explicit),
+		explicit: meta.explicit === true || meta.explicit === 'true',
 		hasEpub: files.some((f) => nameOf(f).endsWith('.epub')),
 		hasSubtitle: files.some((f) => {
 			const n = nameOf(f);
@@ -83,8 +142,11 @@ export function toBookDetails(item: any): BookDetails {
 
 export function formatDuration(seconds: number): string {
 	if (!seconds || seconds < 0) return 'Unknown';
-	const h = Math.floor(seconds / 3600);
-	const m = Math.round((seconds % 3600) / 60);
+	// Round once, at the minute, so 59.98 min carries into 1 hr instead of
+	// printing "60 min" (or "1 hr 60 min" after the split).
+	const totalMinutes = Math.round(seconds / 60);
+	const h = Math.floor(totalMinutes / 60);
+	const m = totalMinutes % 60;
 	if (h === 0) return `${m} min`;
 	return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
 }
@@ -104,7 +166,9 @@ export function formatSize(bytes: number | null): string | null {
 /** Strips the HTML Audiobookshelf allows in descriptions down to plain text. */
 export function descriptionToParagraphs(description: string | null): string[] {
 	if (!description) return [];
-	return description
+	// Decode first: `&nbsp;` and friends are whitespace once decoded, so the
+	// collapse below has to see the decoded form.
+	return decodeEntities(description)
 		.replace(/<br\s*\/?>/gi, '\n')
 		.replace(/<\/p>/gi, '\n\n')
 		.replace(/<[^>]+>/g, '')

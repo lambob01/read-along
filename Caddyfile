@@ -3,8 +3,9 @@
 	encode gzip
 	file_server
 
-	@abs path /abs /abs/*
-	handle @abs {
+	# `handle_path` strips the /abs prefix before proxying; `handle` would
+	# forward it, and the static build has no endpoint left to strip it.
+	handle_path /abs/* {
 		reverse_proxy {$ABS_ORIGIN:http://localhost:13378} {
 			header_up Host {upstream_hostport}
 		}
@@ -13,4 +14,9 @@
 	handle {
 		try_files {path} /index.html
 	}
+
+	# Vite fingerprints every file under /_app/immutable, so those can never
+	# change under a given name.
+	@immutable path /_app/immutable/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
 }

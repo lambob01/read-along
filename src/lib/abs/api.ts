@@ -1,4 +1,5 @@
 import { ABSClient, TranscriptNotFoundError } from './client';
+import { collectFiles } from './metadata';
 import type { ABSLibrary, ABSItem, ABSSession } from '$lib/types';
 
 export { ABSError, TranscriptNotFoundError } from './client';
@@ -34,15 +35,6 @@ export async function getStreamSession(client: ABSClient, itemId: string): Promi
 	return client.post<any>(`/api/items/${itemId}/play?forceDirectPlay=1`, {
 		deviceInfo: { client: 'ReadAlongReader' }
 	});
-}
-
-function collectFiles(item: any): any[] {
-	return [
-		...(item.media?.audioFiles || []),
-		...(item.media?.libraryFiles || []),
-		...(item.media?.tracks || []),
-		...(item.libraryFiles || [])
-	];
 }
 
 export interface ItemSources {

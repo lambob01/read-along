@@ -27,4 +27,23 @@ describe('resolveProxyTarget', () => {
 		const target = resolveProxyTarget('https://abs.example', 'api/items/2/cover', 'token=xyz');
 		expect(target!.search).toBe('?token=xyz');
 	});
+
+	it('preserves a base path on the origin', () => {
+		// ABS_ORIGIN may point at a subpath, e.g. behind a reverse proxy that
+		// mounts it at /abs. The resolved API path must keep that prefix.
+		// (The route param has no leading slash — see the first test.)
+		expect(resolveProxyTarget('https://host/abs', 'api/x', '')!.href).toBe(
+			'https://host/abs/api/x'
+		);
+		expect(resolveProxyTarget('https://host/abs/', 'api/x', '')!.href).toBe(
+			'https://host/abs/api/x'
+		);
+		expect(resolveProxyTarget('https://host/a/b', 'api/x', 'q=1')!.href).toBe(
+			'https://host/a/b/api/x?q=1'
+		);
+	});
+
+	it('rejects a foreign origin even when the base has a path', () => {
+		expect(resolveProxyTarget('https://host/abs', '/evil.example/x', '')).toBeNull();
+	});
 });

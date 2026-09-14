@@ -1,3 +1,3 @@
-# allow crawling everything by default
+# A private instance has nothing to index; keep it out of search results.
 User-agent: *
-Disallow:
+Disallow: /

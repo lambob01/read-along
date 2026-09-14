@@ -9,8 +9,16 @@
  * resolution is the only check that catches every spelling.
  */
 export function resolveProxyTarget(origin: string, path: string, search: string): URL | null {
-	const target = new URL(`/${path}`, origin);
-	if (target.origin !== new URL(origin).origin) return null;
+	const base = new URL(origin);
+	const target = new URL(`/${path}`, base);
+	if (target.origin !== base.origin) return null;
+
+	// The origin may carry a base path (ABS behind a reverse proxy mounted at
+	// `/abs`), and the template above resolves against the host rather than
+	// that directory, so put the prefix back.
+	const prefix = base.pathname.replace(/\/+$/, '');
+	if (prefix) target.pathname = `${prefix}${target.pathname}`;
+
 	target.search = search;
 	return target;
 }

@@ -212,5 +212,5 @@ The reader is modelled on ttu-ebook-reader: header and player bar are absolutely
 
 ### Deployment
 
-Dev: Vite proxies `/abs/*` to `PUBLIC_ABS_ORIGIN` (set in `.env.local`).  
+Dev: the SvelteKit endpoint at `src/routes/abs/[...path]` proxies `/abs/*` to `PUBLIC_ABS_ORIGIN` (set in `.env.local`).  
 Docker: Caddy proxies `/abs/*` to `ABS_ORIGIN` and serves the static build with automatic TLS.

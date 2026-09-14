@@ -1,5 +1,8 @@
 services:
   reader:
+    # Local build. The prebuilt-image variant for a home server is
+    # docker-compose.prod.yml.
+    build: .
     image: ghcr.io/lambob01/read-along:latest
     container_name: reader
     restart: unless-stopped
