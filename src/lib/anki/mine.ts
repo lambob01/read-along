@@ -45,6 +45,29 @@ export function ankiTarget(s: SettingsState): AnkiTarget {
 	return { url: s.ankiUrl.trim() || 'http://localhost:8765', key: s.ankiKey.trim() || undefined };
 }
 
+/**
+ * The impure edges of a mine, injectable so the orchestration can be tested
+ * without audio hardware or a running Anki.
+ */
+export interface MineDeps {
+	capture: typeof captureRange;
+	encode: typeof encodeClip;
+	anki: {
+		findNewestNote: typeof findNewestNote;
+		notesInfo: typeof notesInfo;
+		storeMediaFile: typeof storeMediaFile;
+		updateNoteFields: typeof updateNoteFields;
+		addNote: typeof addNote;
+		addTags: typeof addTags;
+	};
+}
+
+const defaultDeps: MineDeps = {
+	capture: captureRange,
+	encode: encodeClip,
+	anki: { findNewestNote, notesInfo, storeMediaFile, updateNoteFields, addNote, addTags }
+};
+
 export function parseTags(raw: string): string[] {
 	return raw
 		.split(/[\s,]+/)
@@ -82,69 +105,122 @@ export function mediaFilename(itemId: string, start: number, ext: string): strin
 	return `readalong_${safeId}_${Math.round(start * 1000)}.${ext}`;
 }
 
-export async function mineSentence(req: MineRequest, s: SettingsState): Promise<MineResult> {
+/** Everything a mine will send to AnkiConnect, shaped but not sent. */
+export type MinePayload =
+	| {
+			action: 'created';
+			deckName: string;
+			modelName: string;
+			fields: Record<string, string>;
+			tags: string[];
+	  }
+	| {
+			action: 'updated';
+			noteId: number;
+			fields: Record<string, string>;
+			tags: string[];
+	  };
+
+/**
+ * Shapes the fields and tags a mine will use.
+ *
+ * Pure so the field rules can be pinned by tests, and so the update path can
+ * build what it is about to write before anything is uploaded. `noteId` is the
+ * resolved target note in update mode; the create path ignores it.
+ */
+export function buildMinePayload(
+	s: SettingsState,
+	text: string,
+	filename: string,
+	noteId: number | null
+): MinePayload {
+	const sound = `[sound:${filename}]`;
+	const audioField = s.ankiAudioField.trim();
+	const sentenceField = s.ankiSentenceField.trim();
+	const tags = parseTags(s.ankiTags);
+
+	if (s.ankiMode === 'create') {
+		return {
+			action: 'created',
+			deckName: s.ankiDeck.trim(),
+			modelName: s.ankiModel.trim(),
+			fields: { [sentenceField]: text, [audioField]: sound },
+			tags
+		};
+	}
+
+	if (noteId === null) {
+		// Callers resolve the note before building; this guards the invariant.
+		throw new AnkiError('No Anki note to update.');
+	}
+
+	const fields: Record<string, string> = { [audioField]: sound };
+	if (s.ankiUpdateSentence && sentenceField) fields[sentenceField] = text;
+	return { action: 'updated', noteId, fields, tags };
+}
+
+export async function mineSentence(
+	req: MineRequest,
+	s: SettingsState,
+	deps: MineDeps = defaultDeps
+): Promise<MineResult> {
 	const problem = validateAnkiSettings(s);
 	if (problem) throw new AnkiError(problem);
 
 	const target = ankiTarget(s);
 	const audioField = s.ankiAudioField.trim();
-	const sentenceField = s.ankiSentenceField.trim();
-	const tags = parseTags(s.ankiTags);
 
-	// Capture first: it is the slowest step and the one most likely to fail,
-	// and failing before anything reaches Anki leaves nothing half-done.
-	const clip = await captureRange(req.audioSrc, req.start, req.end, {
+	// The target note is resolved before any audio is captured or uploaded: a
+	// missing note or field would otherwise orphan the media file that had
+	// already been stored, after the user waited out the slowest step.
+	let noteId: number | null = null;
+	if (s.ankiMode === 'update-last') {
+		noteId = await deps.anki.findNewestNote(target, s.ankiLastCardQuery.trim());
+		if (noteId === null) {
+			throw new AnkiError(
+				`No Anki note matched "${s.ankiLastCardQuery.trim()}". Make the card first, then mine the audio.`
+			);
+		}
+
+		// The newest note is whatever the user last made, which may not use the
+		// note type they configured. Saying so beats AnkiConnect's bare field error.
+		const [info] = await deps.anki.notesInfo(target, [noteId]);
+		if (info && !(audioField in info.fields)) {
+			throw new AnkiError(
+				`The last card (note type "${info.modelName}") has no field named "${audioField}".`
+			);
+		}
+	}
+
+	const clip = await deps.capture(req.audioSrc, req.start, req.end, {
 		padStart: s.ankiPadStart,
 		padEnd: s.ankiPadEnd,
 		onProgress: req.onProgress,
 		onPhase: req.onPhase
 	});
-	const encoded = await encodeClip(clip.pcm, clip.sampleRate);
+	const encoded = await deps.encode(clip.pcm, clip.sampleRate);
 	const requested = mediaFilename(req.itemId, req.start, encoded.ext);
-	const filename = await storeMediaFile(target, requested, toBase64(encoded.bytes));
+	const filename = await deps.anki.storeMediaFile(target, requested, toBase64(encoded.bytes));
 
-	const sound = `[sound:${filename}]`;
+	const payload = buildMinePayload(s, req.text, filename, noteId);
 
-	if (s.ankiMode === 'create') {
-		const noteId = await addNote(target, {
-			deckName: s.ankiDeck.trim(),
-			modelName: s.ankiModel.trim(),
-			fields: { [sentenceField]: req.text, [audioField]: sound },
-			tags
+	if (payload.action === 'created') {
+		const created = await deps.anki.addNote(target, {
+			deckName: payload.deckName,
+			modelName: payload.modelName,
+			fields: payload.fields,
+			tags: payload.tags
 		});
-		return {
-			action: 'created',
-			noteId,
-			filename,
-			byteLength: encoded.bytes.length
-		};
+		return { action: 'created', noteId: created, filename, byteLength: encoded.bytes.length };
 	}
 
-	const noteId = await findNewestNote(target, s.ankiLastCardQuery.trim());
-	if (noteId === null) {
-		throw new AnkiError(
-			`No Anki note matched "${s.ankiLastCardQuery.trim()}". Make the card first, then mine the audio.`
-		);
-	}
+	await deps.anki.updateNoteFields(target, payload.noteId, payload.fields);
 
-	// The newest note is whatever the user last made, which may not use the
-	// note type they configured. Saying so beats AnkiConnect's bare field error.
-	const [info] = await notesInfo(target, [noteId]);
-	if (info && !(audioField in info.fields)) {
-		throw new AnkiError(
-			`The last card (note type "${info.modelName}") has no field named "${audioField}".`
-		);
-	}
-
-	const fields: Record<string, string> = { [audioField]: sound };
-	if (s.ankiUpdateSentence && sentenceField) fields[sentenceField] = req.text;
-	await updateNoteFields(target, noteId, fields);
-
-	if (tags.length > 0) {
+	if (payload.tags.length > 0) {
 		// Non-fatal: the audio is already attached, and a tag failure should not
 		// read as a mining failure.
 		try {
-			await addTags(target, [noteId], tags.join(' '));
+			await deps.anki.addTags(target, [payload.noteId], payload.tags.join(' '));
 		} catch {
 			/* ignore */
 		}
@@ -152,7 +228,7 @@ export async function mineSentence(req: MineRequest, s: SettingsState): Promise<
 
 	return {
 		action: 'updated',
-		noteId,
+		noteId: payload.noteId,
 		filename,
 		byteLength: encoded.bytes.length
 	};

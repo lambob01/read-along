@@ -67,8 +67,27 @@ async function invoke<T>(
 		throw new AnkiError(`AnkiConnect returned HTTP ${res.status}`);
 	}
 
-	const payload = (await res.json()) as { result: T; error: string | null };
+	let raw: unknown;
+	try {
+		raw = await res.json();
+	} catch (err) {
+		// A 200 carrying HTML (a reverse proxy error page, say) would otherwise
+		// surface as a bare SyntaxError from `res.json()`.
+		throw new AnkiError(
+			`AnkiConnect returned a response that was not JSON: ${
+				err instanceof Error ? err.message : String(err)
+			}`
+		);
+	}
+	if (raw === null || typeof raw !== 'object') {
+		throw new AnkiError(`AnkiConnect returned an unusable response for ${action}`);
+	}
+
+	const payload = raw as { result: T; error?: string | null };
 	if (payload.error) throw new AnkiError(payload.error);
+	if (!('result' in payload)) {
+		throw new AnkiError(`AnkiConnect returned no result for ${action}`);
+	}
 	return payload.result;
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ankiVersion, REQUEST_TIMEOUT_MS } from '$lib/anki/connect';
+import { AnkiError, ankiVersion, REQUEST_TIMEOUT_MS } from '$lib/anki/connect';
 
 const TARGET = { url: 'http://localhost:8765' };
 
@@ -39,5 +39,31 @@ describe('ankiVersion', () => {
 		const promise = ankiVersion(TARGET);
 		vi.advanceTimersByTime(REQUEST_TIMEOUT_MS);
 		await expect(promise).rejects.toMatchObject({ kind: 'unreachable' });
+	});
+
+	it('names an unreadable response body instead of leaking a SyntaxError', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue({
+				ok: true,
+				json: async () => {
+					throw new SyntaxError('Unexpected token < in JSON at position 0');
+				}
+			})
+		);
+
+		const err = await ankiVersion(TARGET).catch((e: unknown) => e);
+
+		expect(err).toBeInstanceOf(AnkiError);
+		expect((err as Error).message).toMatch(/JSON/);
+	});
+
+	it('rejects a JSON body that carries no result', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+
+		const err = await ankiVersion(TARGET).catch((e: unknown) => e);
+
+		expect(err).toBeInstanceOf(AnkiError);
+		expect((err as Error).message).toMatch(/no result/i);
 	});
 });

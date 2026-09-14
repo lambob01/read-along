@@ -285,63 +285,75 @@ interface Rig {
 	dispose: () => void;
 }
 
-let rigPromise: Promise<Rig> | null = null;
+/**
+ * A rig whose metadata is still loading: the promise, plus a handle to tear
+ * the half-built element and graph down if another source takes its place.
+ */
+interface PendingRig {
+	src: string;
+	promise: Promise<Rig>;
+	dispose: () => void;
+}
+
+let pendingRig: PendingRig | null = null;
 let currentRig: Rig | null = null;
 
 /** Metadata for a long book is a large download; only ever paid once. */
-const PREPARE_TIMEOUT_MS = 120000;
+export const PREPARE_TIMEOUT_MS = 120000;
 
-async function getRig(c: AudioContext, src: string, useWorklet: boolean): Promise<Rig> {
-	if (currentRig && currentRig.src === src) return currentRig;
-	if (currentRig) {
-		currentRig.dispose();
-		currentRig = null;
-		rigPromise = null;
-	}
-	if (rigPromise) return rigPromise;
+/**
+ * Builds the element and its audio graph, disposing both if metadata never
+ * arrives.
+ *
+ * The element and the `MediaElementAudioSourceNode` it feeds are permanent
+ * once created, so a preparation that fails has to tear them down itself —
+ * otherwise a source node stays connected to the destination for the rest of
+ * the session with nothing left to drive it.
+ */
+function startRig(c: AudioContext, src: string, useWorklet: boolean): PendingRig {
+	const el = new Audio();
+	// Not 'auto': the point of this element is to seek, and letting it
+	// greedily buffer a multi-hour book from byte zero competes with the
+	// reader's own streaming for both bandwidth and connections.
+	el.preload = 'metadata';
+	el.src = src;
+	// Rate 1 with pitch preserved: the captured samples are the book's own
+	// audio, not a resampled approximation of it.
+	el.playbackRate = 1;
+	el.preservesPitch = true;
 
-	rigPromise = (async () => {
-		const el = new Audio();
-		// Not 'auto': the point of this element is to seek, and letting it
-		// greedily buffer a multi-hour book from byte zero competes with the
-		// reader's own streaming for both bandwidth and connections.
-		el.preload = 'metadata';
-		el.src = src;
-		// Rate 1 with pitch preserved: the captured samples are the book's own
-		// audio, not a resampled approximation of it.
-		el.playbackRate = 1;
-		el.preservesPitch = true;
+	const source = c.createMediaElementSource(el);
+	// A muted path to the destination: the tap must be reachable from the
+	// destination to be scheduled, but must not be audible over the
+	// reader's own playback.
+	const silent = c.createGain();
+	silent.gain.value = 0;
 
-		const source = c.createMediaElementSource(el);
-		// A muted path to the destination: the tap must be reachable from the
-		// destination to be scheduled, but must not be audible over the
-		// reader's own playback.
-		const silent = c.createGain();
-		silent.gain.value = 0;
+	const node = createCaptureNode(c, useWorklet, (samples) => rig.sink?.(samples));
 
-		const rig: Rig = {
-			el,
-			src,
-			sink: null,
-			dispose: () => {
-				try {
-					el.pause();
-					source.disconnect();
-					node.disconnect();
-					silent.disconnect();
-				} catch {
-					/* already torn down */
-				}
-				el.removeAttribute('src');
-				el.load();
+	const rig: Rig = {
+		el,
+		src,
+		sink: null,
+		dispose: () => {
+			try {
+				el.pause();
+				source.disconnect();
+				node.disconnect();
+				silent.disconnect();
+			} catch {
+				/* already torn down */
 			}
-		};
+			el.removeAttribute('src');
+			el.load();
+		}
+	};
 
-		const node = createCaptureNode(c, useWorklet, (samples) => rig.sink?.(samples));
-		source.connect(node);
-		node.connect(silent);
-		silent.connect(c.destination);
+	source.connect(node);
+	node.connect(silent);
+	silent.connect(c.destination);
 
+	const promise = (async () => {
 		if (el.readyState < HTMLMediaElement.HAVE_METADATA) {
 			const started = Date.now();
 			await once(
@@ -356,14 +368,45 @@ async function getRig(c: AudioContext, src: string, useWorklet: boolean): Promis
 			});
 		}
 
-		currentRig = rig;
 		return rig;
-	})();
+	})().catch((err) => {
+		rig.dispose();
+		throw err;
+	});
+
+	return { src, promise, dispose: () => rig.dispose() };
+}
+
+export async function getRig(c: AudioContext, src: string, useWorklet: boolean): Promise<Rig> {
+	if (currentRig && currentRig.src === src) return currentRig;
+	if (currentRig) {
+		currentRig.dispose();
+		currentRig = null;
+	}
+
+	if (pendingRig) {
+		if (pendingRig.src === src) return pendingRig.promise;
+		// A build for another book is still loading. It must not be handed to
+		// this capture, and its graph must not linger, so drop it now.
+		pendingRig.dispose();
+		pendingRig = null;
+	}
+
+	const pending = startRig(c, src, useWorklet);
+	pendingRig = pending;
 
 	try {
-		return await rigPromise;
+		const rig = await pending.promise;
+		if (pendingRig !== pending) {
+			// A later request superseded this one while it loaded; its element
+			// has already been disposed and cannot be used.
+			throw new CaptureError('stalled', 'The capture source changed while it was loading');
+		}
+		pendingRig = null;
+		currentRig = rig;
+		return rig;
 	} catch (err) {
-		rigPromise = null;
+		if (pendingRig === pending) pendingRig = null;
 		throw err;
 	}
 }
@@ -372,7 +415,19 @@ async function getRig(c: AudioContext, src: string, useWorklet: boolean): Promis
 export function releaseCapture() {
 	currentRig?.dispose();
 	currentRig = null;
-	rigPromise = null;
+	pendingRig?.dispose();
+	pendingRig = null;
+}
+
+/**
+ * Strips the query and fragment off a URL before it reaches the console.
+ *
+ * The reader appends the ABS token to the audio source, and a capture can fail
+ * in ways that get pasted into issues; the token must not travel with it.
+ */
+export function redactUrl(src: string): string {
+	const cut = src.search(/[?#]/);
+	return cut === -1 ? src : src.slice(0, cut);
 }
 
 /**
@@ -400,7 +455,7 @@ export async function captureRange(
 	}
 
 	const c = audioContext();
-	console.info('[readalong] capture starting', { from, to, context: c.state, src });
+	console.info('[readalong] capture starting', { from, to, context: c.state, src: redactUrl(src) });
 
 	// Both of these can hang rather than reject. A blocked AudioContext.resume()
 	// in particular stays pending forever instead of throwing, which is exactly

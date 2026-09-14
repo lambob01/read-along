@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest';
-import { cutSegment, mediaToFrame, CaptureError, type Segment } from '$lib/anki/capture';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+	CaptureError,
+	captureRange,
+	cutSegment,
+	getRig,
+	mediaToFrame,
+	redactUrl,
+	releaseCapture,
+	PREPARE_TIMEOUT_MS,
+	type Segment
+} from '$lib/anki/capture';
 
 const RATE = 1000;
 const CHUNK = 100;
@@ -90,7 +100,198 @@ describe('mediaToFrame', () => {
 
 describe('captureRange length cap', () => {
 	it('rejects a segment longer than the cap before touching audio', async () => {
-		const { captureRange } = await import('$lib/anki/capture');
 		await expect(captureRange('x', 0, 10_000)).rejects.toMatchObject({ reason: 'too-long' });
+	});
+});
+
+class FakeNode {
+	disconnects = 0;
+	connect(_target?: unknown) {
+		return this;
+	}
+	disconnect() {
+		this.disconnects++;
+	}
+}
+
+class FakeGain extends FakeNode {
+	gain = { value: 0 };
+}
+
+class FakeProcessor extends FakeNode {
+	onaudioprocess: ((event: unknown) => void) | null = null;
+}
+
+/** The stand-in graph `getRig` builds, so disconnects can be observed. */
+class FakeContext {
+	state = 'running';
+	sampleRate = 48000;
+	destination = new FakeNode();
+	sources: FakeNode[] = [];
+	gains: FakeGain[] = [];
+	processors: FakeProcessor[] = [];
+	resume = async () => {};
+	createMediaElementSource() {
+		const node = new FakeNode();
+		this.sources.push(node);
+		return node;
+	}
+	createGain() {
+		const gain = new FakeGain();
+		this.gains.push(gain);
+		return gain;
+	}
+	createScriptProcessor() {
+		const processor = new FakeProcessor();
+		this.processors.push(processor);
+		return processor;
+	}
+}
+
+class FakeAudio {
+	static instances: FakeAudio[] = [];
+	src = '';
+	readyState = 0;
+	duration = NaN;
+	preload = '';
+	playbackRate = 1;
+	preservesPitch = true;
+	paused = true;
+	loads = 0;
+	private listeners = new Map<string, Set<() => void>>();
+
+	constructor() {
+		FakeAudio.instances.push(this);
+	}
+
+	pause() {
+		this.paused = true;
+	}
+
+	load() {
+		this.loads++;
+	}
+
+	removeAttribute(name: string) {
+		if (name === 'src') this.src = '';
+	}
+
+	addEventListener(type: string, fn: () => void) {
+		if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+		this.listeners.get(type)?.add(fn);
+	}
+
+	removeEventListener(type: string, fn: () => void) {
+		this.listeners.get(type)?.delete(fn);
+	}
+
+	dispatch(type: string) {
+		for (const fn of this.listeners.get(type) ?? []) fn();
+	}
+}
+
+const asContext = (c: FakeContext) => c as unknown as AudioContext;
+
+beforeEach(() => {
+	FakeAudio.instances = [];
+	vi.stubGlobal('Audio', FakeAudio);
+	// `getRig` gates on the media constant, which node does not define.
+	vi.stubGlobal('HTMLMediaElement', { HAVE_METADATA: 1 });
+});
+
+afterEach(() => {
+	releaseCapture();
+	vi.unstubAllGlobals();
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
+
+describe('getRig', () => {
+	it('disposes the element and graph when metadata never arrives', async () => {
+		vi.useFakeTimers();
+		const c = new FakeContext();
+
+		const pending = getRig(asContext(c), '/abs/audio?token=SECRET', false);
+		const el = FakeAudio.instances[0];
+		const failed = expect(pending).rejects.toMatchObject({ reason: 'stalled' });
+
+		await vi.advanceTimersByTimeAsync(PREPARE_TIMEOUT_MS);
+		await failed;
+
+		expect(el.src).toBe('');
+		expect(el.loads).toBe(1);
+		expect(c.sources[0].disconnects).toBeGreaterThan(0);
+		expect(c.processors[0].disconnects).toBeGreaterThan(0);
+		expect(c.gains[0].disconnects).toBeGreaterThan(0);
+	});
+
+	it('builds a fresh rig when a different source is requested mid-load', async () => {
+		vi.useFakeTimers();
+		const c = new FakeContext();
+
+		const first = getRig(asContext(c), 'book-a.mp3', false);
+		const firstEl = FakeAudio.instances[0];
+		const second = getRig(asContext(c), 'book-b.mp3', false);
+		const secondEl = FakeAudio.instances[1];
+
+		expect(secondEl).not.toBe(firstEl);
+		expect(secondEl.src).toBe('book-b.mp3');
+		// The abandoned book's element must not stay connected to the graph.
+		expect(firstEl.src).toBe('');
+		expect(c.sources[0].disconnects).toBeGreaterThan(0);
+
+		secondEl.readyState = 1;
+		secondEl.dispatch('loadedmetadata');
+		await expect(second).resolves.toMatchObject({ src: 'book-b.mp3' });
+
+		const failed = expect(first).rejects.toMatchObject({ reason: 'stalled' });
+		await vi.advanceTimersByTimeAsync(PREPARE_TIMEOUT_MS);
+		await failed;
+	});
+
+	it('reuses the element already prepared for the same source', async () => {
+		const c = new FakeContext();
+		const first = getRig(asContext(c), 'book-a.mp3', false);
+		const el = FakeAudio.instances[0];
+		el.readyState = 1;
+		el.dispatch('loadedmetadata');
+		const rig = await first;
+
+		await expect(getRig(asContext(c), 'book-a.mp3', false)).resolves.toBe(rig);
+		expect(FakeAudio.instances).toHaveLength(1);
+	});
+});
+
+describe('redactUrl', () => {
+	it('drops the query so a logged source cannot leak the ABS token', () => {
+		expect(redactUrl('/abs/audio/abc?token=SECRET')).toBe('/abs/audio/abc');
+	});
+
+	it('leaves a URL without a query alone', () => {
+		expect(redactUrl('/abs/audio/abc')).toBe('/abs/audio/abc');
+	});
+});
+
+describe('captureRange logging', () => {
+	it('does not log the access token in the source URL', async () => {
+		vi.useFakeTimers();
+		const c = new FakeContext();
+		c.state = 'suspended';
+		c.resume = () => Promise.reject(new Error('blocked'));
+		vi.stubGlobal(
+			'AudioContext',
+			class {
+				constructor() {
+					return c;
+				}
+			} as unknown as typeof AudioContext
+		);
+		const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+		await expect(captureRange('/abs/audio?token=SECRET', 0, 1)).rejects.toThrow();
+
+		const logged = JSON.stringify(info.mock.calls);
+		expect(logged).toContain('capture starting');
+		expect(logged).not.toContain('SECRET');
 	});
 });

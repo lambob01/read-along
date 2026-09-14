@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { validateAnkiSettings, mediaFilename, parseTags, ankiTarget } from '$lib/anki/mine';
+import { describe, it, expect, vi } from 'vitest';
+import {
+	ankiTarget,
+	buildMinePayload,
+	mediaFilename,
+	mineSentence,
+	parseTags,
+	validateAnkiSettings,
+	type MineDeps,
+	type MineRequest
+} from '$lib/anki/mine';
 import { newestNoteId } from '$lib/anki/connect';
 import { defaultSettings, type SettingsState } from '$lib/stores/settings';
 
@@ -94,5 +103,160 @@ describe('newestNoteId', () => {
 
 	it('reports no match rather than throwing', () => {
 		expect(newestNoteId([])).toBeNull();
+	});
+});
+
+const UPDATE_SETTINGS = withAnki({ ankiAudioField: 'SentenceAudio' });
+
+const REQUEST: MineRequest = {
+	itemId: 'item-1',
+	audioSrc: '/abs/audio?token=x',
+	text: 'こんにちは。',
+	start: 12.5,
+	end: 15
+};
+
+/** Records every impure step so the orchestration can be checked in order. */
+function makeDeps(): MineDeps {
+	return {
+		capture: vi.fn(async () => ({ pcm: new Float32Array(4), sampleRate: 48000 })),
+		encode: vi.fn(async () => ({
+			bytes: new Uint8Array([1, 2, 3]),
+			ext: 'mp3' as const,
+			mime: 'audio/mpeg'
+		})),
+		anki: {
+			findNewestNote: vi.fn(async () => 1700000000000),
+			notesInfo: vi.fn(async () => [
+				{
+					noteId: 1700000000000,
+					modelName: 'Basic',
+					fields: { SentenceAudio: { value: '', order: 0 } },
+					tags: []
+				}
+			]),
+			storeMediaFile: vi.fn(async (_target, filename) => filename),
+			updateNoteFields: vi.fn(async () => null),
+			addNote: vi.fn(async () => 42),
+			addTags: vi.fn(async () => null)
+		}
+	};
+}
+
+describe('buildMinePayload', () => {
+	it('shapes a new note with the sound, deck, model, fields and tags', () => {
+		const payload = buildMinePayload(
+			withAnki({
+				ankiMode: 'create',
+				ankiDeck: ' Mining ',
+				ankiModel: ' Basic ',
+				ankiSentenceField: 'Front',
+				ankiAudioField: 'Audio',
+				ankiTags: 'jp1k, mined'
+			}),
+			'こんにちは。',
+			'readalong_item-1_12500.mp3',
+			null
+		);
+
+		expect(payload).toEqual({
+			action: 'created',
+			deckName: 'Mining',
+			modelName: 'Basic',
+			fields: { Front: 'こんにちは。', Audio: '[sound:readalong_item-1_12500.mp3]' },
+			tags: ['jp1k', 'mined']
+		});
+	});
+
+	it('writes the sentence field on an update only when that option is on', () => {
+		const base = withAnki({ ankiAudioField: 'SentenceAudio', ankiSentenceField: 'Sentence' });
+		const off = buildMinePayload(base, 'text', 'readalong_x_1.mp3', 42);
+
+		expect(off).toEqual({
+			action: 'updated',
+			noteId: 42,
+			fields: { SentenceAudio: '[sound:readalong_x_1.mp3]' },
+			tags: ['read-along']
+		});
+
+		const on = buildMinePayload(
+			{ ...base, ankiUpdateSentence: true },
+			'text',
+			'readalong_x_1.mp3',
+			42
+		);
+		expect(on.fields.Sentence).toBe('text');
+	});
+});
+
+describe('mineSentence', () => {
+	it('does not capture or upload when the last-card search matches nothing', async () => {
+		const deps = makeDeps();
+		deps.anki.findNewestNote = vi.fn(async () => null);
+
+		await expect(mineSentence(REQUEST, UPDATE_SETTINGS, deps)).rejects.toThrow(
+			/No Anki note matched/
+		);
+
+		expect(deps.anki.storeMediaFile).not.toHaveBeenCalled();
+		expect(deps.capture).not.toHaveBeenCalled();
+	});
+
+	it('does not capture or upload when the target note lacks the audio field', async () => {
+		const deps = makeDeps();
+		deps.anki.notesInfo = vi.fn(async () => [
+			{ noteId: 1, modelName: 'Basic', fields: { Front: { value: '', order: 0 } }, tags: [] }
+		]);
+
+		await expect(mineSentence(REQUEST, UPDATE_SETTINGS, deps)).rejects.toThrow(
+			/no field named "SentenceAudio"/
+		);
+
+		expect(deps.anki.storeMediaFile).not.toHaveBeenCalled();
+		expect(deps.capture).not.toHaveBeenCalled();
+	});
+
+	it('uploads the clip and writes the built payload onto the last note', async () => {
+		const deps = makeDeps();
+
+		const result = await mineSentence(REQUEST, UPDATE_SETTINGS, deps);
+
+		expect(deps.anki.updateNoteFields).toHaveBeenCalledWith(expect.anything(), 1700000000000, {
+			SentenceAudio: '[sound:readalong_item-1_12500.mp3]'
+		});
+		expect(deps.anki.addTags).toHaveBeenCalledWith(
+			expect.anything(),
+			[1700000000000],
+			'read-along'
+		);
+		expect(result).toEqual({
+			action: 'updated',
+			noteId: 1700000000000,
+			filename: 'readalong_item-1_12500.mp3',
+			byteLength: 3
+		});
+	});
+
+	it('creates a note from the built payload in create mode', async () => {
+		const deps = makeDeps();
+		const settings = withAnki({
+			ankiMode: 'create',
+			ankiDeck: 'Mining',
+			ankiModel: 'Basic',
+			ankiSentenceField: 'Front',
+			ankiAudioField: 'Audio',
+			ankiTags: ''
+		});
+
+		const result = await mineSentence(REQUEST, settings, deps);
+
+		expect(deps.anki.findNewestNote).not.toHaveBeenCalled();
+		expect(deps.anki.addNote).toHaveBeenCalledWith(expect.anything(), {
+			deckName: 'Mining',
+			modelName: 'Basic',
+			fields: { Front: 'こんにちは。', Audio: '[sound:readalong_item-1_12500.mp3]' },
+			tags: []
+		});
+		expect(result.action).toBe('created');
 	});
 });
