@@ -1,5 +1,6 @@
 import { PUBLIC_ABS_ORIGIN } from '$env/static/public';
 import { resolveProxyTarget } from '$lib/abs/proxy-target';
+import { fetchWithDeadline } from '$lib/abs/proxy-fetch';
 import { env } from '$env/dynamic/private';
 import { ProxyAgent } from 'undici';
 import type { Dispatcher } from 'undici';
@@ -16,9 +17,8 @@ const ABS_PROXY = env.ABS_HTTP_PROXY || '';
 const dispatcher: Dispatcher | undefined = ABS_PROXY ? new ProxyAgent(ABS_PROXY) : undefined;
 
 /**
- * Cap on a hung upstream. Generous because this route also streams EPUB
- * downloads — the point is to free the client when ABS never answers, not to
- * put a deadline on a slow transfer.
+ * Cap on waiting for response headers from a hung upstream. The deadline is
+ * lifted once they arrive, so a slow EPUB transfer is not cut short.
  */
 const UPSTREAM_TIMEOUT_MS = 120_000;
 
@@ -67,8 +67,7 @@ async function proxy(
 	const init: RequestInit = {
 		method,
 		headers: filterHeaders(request.headers),
-		redirect: 'manual',
-		signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+		redirect: 'manual'
 	};
 
 	if (method !== 'GET' && method !== 'HEAD' && request.body) {
@@ -77,7 +76,12 @@ async function proxy(
 	}
 
 	try {
-		const res = await fetchWithProxy(target.toString(), init);
+		const res = await fetchWithDeadline(
+			fetchWithProxy,
+			target.toString(),
+			init,
+			UPSTREAM_TIMEOUT_MS
+		);
 
 		const resHeaders = new Headers();
 		// undici has already decoded the body, so an upstream encoding marker
