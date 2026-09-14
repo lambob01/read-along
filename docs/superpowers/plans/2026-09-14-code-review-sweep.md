@@ -13,7 +13,7 @@
 - Work on branch `fix/code-review-sweep`; commit per task. Commit messages are capitalized imperative sentences, no conventional-commit prefix (match `git log`, e.g. "Fix mobile desync when jumping to the narrated line").
 - TDD: write the failing test first, watch it fail, then implement. No production code without a failing test (exceptions: config/docs-only steps, verified by reading).
 - Tests must use real code. No `vi.mock` — the repo has none. Use dependency seams (injectable `fetch`/`deps`) instead.
-- Comments: the repo explains *why*; follow its voice. Do not add noise comments.
+- Comments: the repo explains _why_; follow its voice. Do not add noise comments.
 - Any change to alignment inputs/outputs bumps `ALGORITHM_VERSION` (`src/lib/epub/cache.ts:29`). Task 1 bumps 3→4; Task 2 bumps 4→5.
 - When code and CLAUDE.md disagree, fix whichever is wrong and update the doc in the same task.
 - Run `npx vitest run <file>` for focused loops; `npm run test`, `npm run check`, `npm run lint` before every commit.
@@ -24,11 +24,13 @@
 ### Task 1: Alignment algorithm correctness and performance
 
 **Files:**
+
 - Modify: `src/lib/sync/align.ts:313`, `:336-340`, `:330-333`
 - Modify: `src/lib/epub/cache.ts:29` (version bump)
 - Test: `src/lib/sync/align.dom.test.ts`
 
 **Fixes (review findings):**
+
 1. Corroboration is keyed to the first matched character (`align.ts:313`), so a sentence that starts matching locally and re-anchors its tail far ahead skips corroboration. Reproduced: a >100-char sentence whose first characters match at the cursor and whose tail recurs past `LONG_JUMP` claims 0→300s uncorroborated and strands every sentence in between.
 2. `stats.matchedCues` is counted before `finalize` demotes overlapping/zero-width sentences (`:336-340` vs `:382-411`), inflating the cue-match percentage shown in the reader.
 3. `matchedCueIdx` scans every span for every timed sentence (`:336-340`), O(sentences × cues); measured ~1.2 s at 15k × 15k.
@@ -37,6 +39,7 @@
 6. `ALGORITHM_VERSION` must bump because corroboration changes which sentences are timed.
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: unchanged `alignEpubToCues(doc, cues, opts)` signature and `AlignedIndex` shape. Do not add fields to `AlignedSentence` unless needed for stats; if you do, bump the cache version (already bumped here) and update `cache.ts` rebuild accordingly.
 
@@ -103,6 +106,7 @@ if (timed && lastCueOffset - cursorBefore > LONG_JUMP) {
 ### Task 2: EPUB text pipeline and alignment cache
 
 **Files:**
+
 - Modify: `src/lib/epub/text.ts:56-86` (`collectBlocks`), `:1-4` (stale comment)
 - Modify: `src/lib/epub/parse.ts:60-72` (nav titles), `:176-180` (strip set → shared set)
 - Modify: `src/lib/epub/zip.ts:14-17` (image filter), `:56-62` (root-absolute hrefs)
@@ -112,6 +116,7 @@ if (timed && lastCueOffset - cursorBefore > LONG_JUMP) {
 - Test: `src/lib/epub/cache.test.ts`, `src/lib/epub/parse.dom.test.ts`, `src/lib/epub/source.dom.test.ts`
 
 **Fixes:**
+
 1. `collectBlocks` (`text.ts:75`) requires `children.length === 0`, and the walk only recurses elements, so direct text in mixed containers is silently dropped: `<div>前置き <em>強調</em> 後ろ</div>` yields only `強調`; `<td>セル <b>強調</b></td>` loses `セル`. The same traversal feeds alignment and rendering.
 2. `parseEpub` strips only `script/style/link/meta` (`parse.ts:176-180`), while `cloneForRender` also drops `svg/video/audio/iframe/object/embed/form`; blocks containing those elements get offsets computed against text the clone no longer has.
 3. Nav landmark anchors unconditionally overwrite toc titles for the same file (`parse.ts:60-72`); NCX correctly keeps first-wins.
@@ -124,6 +129,7 @@ if (timed && lastCueOffset - cursorBefore > LONG_JUMP) {
 10. `text.ts:4` doc comment describes `BLOCK_TAGS` as inline elements.
 
 **Interfaces:**
+
 - Produces (Task 3 consumes): `export const NON_PROSE_TAGS: Set<string>` in `src/lib/epub/text.ts` — the union `script/style/link/meta/svg/video/audio/iframe/object/embed/form`. `parse.ts`'s `stripNonProse` uses it. Task 3 imports it in `epubRenderer.ts` for `cloneForRender` so alignment and rendering traverse identical text.
 - Bumps `ALGORITHM_VERSION` 4→5 (text collection and parse output changed).
 
@@ -178,6 +184,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 ### Task 3: Renderer sanitizer, layout anchoring, highlight and progress
 
 **Files:**
+
 - Modify: `src/lib/reader/epubRenderer.ts:5-7,44-48` (drop `href`/`target`), `:13-25` (use shared `NON_PROSE_TAGS`), `:659` (`scrollToChapter` tagging), dead `mountAll` (`:149-150,673-676`)
 - Modify: `src/lib/reader/highlight.ts:101-105` (`typeof Highlight`), `HighlightHandle.deactivate` if unused
 - Modify: `src/lib/reader/progress.ts:77-83` (`formatRemaining`)
@@ -185,6 +192,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 - Test: `src/lib/reader/epubRenderer.dom.test.ts`, `src/lib/reader/highlight.dom.test.ts`, `src/lib/reader/progress.test.ts`
 
 **Fixes:**
+
 1. Sanitizer keeps `href` (including `javascript:`) and `target` on cloned anchors; the page's click handler that neutralises them is dead until Task 5 and must not be the only defence.
 2. `cloneForRender` drops more elements than `parseEpub` (resolved by importing `NON_PROSE_TAGS` from Task 2).
 3. `scrollToChapter` scrolls without tagging the scroll for the auto-scroller (`onAdjustScroll`/`noteProgrammaticScroll`), so the contents jump is read as a lost correction.
@@ -194,6 +202,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 7. No test exercises `withScrollAnchor` (tests never pass a `scroller`), so its early-return path is the only one covered.
 
 **Interfaces:**
+
 - Consumes: `NON_PROSE_TAGS` from `src/lib/epub/text.ts`.
 - Produces: `scrollToChapter` (and any programmatic scroll the renderer makes) fires the existing `onAdjustScroll` hook so callers can tag it; do not change the callback's signature.
 
@@ -221,6 +230,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 ### Task 4: Sync controllers and search
 
 **Files:**
+
 - Modify: `src/lib/sync/ticker.ts:136-144` (disabled visibility), `stop()` (`:5,218-221`), `destroy()`
 - Modify: `src/lib/sync/repeat.ts:125` (redundant check), `:159` (lazy interval)
 - Modify: `src/lib/sync/autoscroll.ts:153-167` (pending across suspend), `:128-151` (programmatic scroll), `:241-246` (zero-size), add `markReaderDriven()`
@@ -231,6 +241,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 - Test: `src/lib/sync/ticker.dom.test.ts`, `repeat.test.ts`, `autoscroll.dom.test.ts`, `sync.test.ts`, `parse` tests
 
 **Fixes:**
+
 1. `handleVisibility` re-arms RAF even when `setEnabled(false)` (`ticker.ts:136-144`), contradicting "stops sampling".
 2. `stop()` has no caller in `src/`.
 3. A stale `pendingId` survives a later `suspend()` and is applied at timer expiry (`autoscroll.ts:153-167`), dragging the reader back ~3s after a contents jump.
@@ -246,6 +257,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 13. Autoscroll zero-size test pin and `destroy()` clearing document/timer state.
 
 **Interfaces:**
+
 - Produces: `AutoScroller.markReaderDriven(): void` — declares that an app-initiated jump (contents chapter jump) is the reason the page is moving. Implementation: `readerDriven = true; selfScrollUntil = 0; pendingId = null; suspend(); scheduleSettleCheck();`. Task 5 calls it in `jumpToEpubChapter` before scrolling.
 - Produces: shared `lowerBound(starts: Float64Array, value: number): number` / `upperBound` helper with the same semantics as the existing three loops; all three call sites use it and existing tests must stay green.
 
@@ -278,6 +290,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 ### Task 5: Reader page, routes and components
 
 **Files:**
+
 - Modify: `src/routes/read/[itemId]/+page.svelte` (listeners `:540-541`/`:863-864`, keyboard/focus, teardown `:837-881`, no-audio `:576-583`, `jumpToEpubChapter` `:1185`, catch `:661-665`, cover `:558`, shortcut list)
 - Modify: `src/routes/library/+page.svelte:45-56` (race), `:23-43` (disposed)
 - Modify: `src/routes/book/[itemId]/+page.svelte:32-47` (disposed)
@@ -286,6 +299,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 - Test: new page/component tests where feasible; otherwise extracted helpers with tests
 
 **Fixes:**
+
 1. **Critical:** `scrollerEl?.addEventListener` runs in `onMount` while `loading === true`, so the element does not exist yet (`:147`, `:1352`, `:1744`). Content-link interception and `handleNarrationScroll` have never worked; footnote links kill the page; the `javascript:` href guard is absent.
 2. Settings sheet is `aria-modal` with no focus trap; backdrops are focusable; Space/Enter are ceded only to `HTMLButtonElement`; Escape closes only the sheet.
 3. Library `selectLibrary` is last-response-wins (`library/+page.svelte:45-56`).
@@ -300,12 +314,13 @@ it('still recurses when a container has only whitespace direct text', () => {
 12. Remove page usages of dead store members that Task 6 deletes (`reader.setError/setLoading`, `player.setChapter`, `connection.url`, `recent.remove`, `offsets.hydrate`).
 
 **Interfaces:**
+
 - Consumes: `AutoScroller.markReaderDriven()` (Task 4).
 - Produces: extracted, testable helpers where the page is currently untestable — at minimum a `bindScrollerListeners(el, handlers)`-style effect/helper so the attachment timing is covered by a test.
 
 - [ ] **Step 1: Write failing tests**
 - **Highest priority:** a regression test that would fail on the old attachment timing. Preferred: mount the reader page with `$app/navigation`, `$app/stores`, `connectionToken` and the ABS client seam stubbed, then assert an in-content `<a href="chapter.xhtml">` click is default-prevented. If mounting the page proves impractical, extract the wiring into a helper and test that it attaches to an element that appears after the call site returns (the loading-gate shape).
-- Library race: extract the item loader behind an injectable client; two overlapping responses, assert the last *requested* library wins.
+- Library race: extract the item loader behind an injectable client; two overlapping responses, assert the last _requested_ library wins.
 - Disposed-guard tests are impractical at page level; assert via the extracted loader where possible, otherwise document as manually verified.
 
 - [ ] **Step 2: Verify RED** — the listener test fails (handler never attached) and the race test fails (stale response applied).
@@ -328,6 +343,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 ### Task 6: Store persistence safety
 
 **Files:**
+
 - Modify: `src/lib/stores/settings.ts:254-270` (validate), `:316-321` (safe write), dead members? (`reader` is separate)
 - Modify: `src/lib/stores/player.ts:192` (safe write), `:97-115` (`seekWhenReady` listeners), `:163-176` (`setSrc('')`), `:139-141` (`setChapter`/`chapter` — remove if unused after Task 5)
 - Modify: `src/lib/stores/offsets.ts:43` (safe write), `:50-53` (`hydrate` or wire storage events)
@@ -337,6 +353,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 - Test: `settings.dom.test.ts`, `player.test.ts`, `connection.test.ts`, `offsets` tests
 
 **Fixes:**
+
 1. Persisted settings merge without type validation (`settings.ts:254-270`): a stored `"fontSize": "1.4"`, `"progressModes": {}` or `"customTheme": {"bg": null}` throws inside `subscribe(persist)` at module init → white screen.
 2. Every localStorage write is unguarded (`settings:318`, `player:192`, `offsets:43`, `connection:23`, `recent:40`): `setItem` throws `QuotaExceededError`, including inside a 5 s interval and `onDestroy`.
 3. `seekWhenReady` leaves listeners on the singleton if metadata never arrives (`player.ts:97-115`).
@@ -345,6 +362,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 6. `offsets.hydrate` is documented as a cross-tab path but no `storage` listener exists.
 
 **Interfaces:**
+
 - Produces: `safeSetItem(key: string, value: string): void` in a shared place (e.g. `src/lib/stores/storage.ts`) used by all five stores.
 - Produces: `sanitizeSettings(parsed: unknown): SettingsState` (or per-key coercion) exported for tests.
 
@@ -374,6 +392,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 ### Task 7: Proxy, ABS client, deploy and configuration
 
 **Files:**
+
 - Modify: `Caddyfile:6-11` (`handle_path`, immutable cache headers)
 - Modify: `src/routes/abs/[...path]/+server.ts:26-34,57-76` (headers, timeout, redaction)
 - Modify: `src/lib/abs/proxy-target.ts:11-16` (preserve base path)
@@ -387,6 +406,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 - Test: `proxy-target.test.ts`, new `client.test.ts`, `metadata.test.ts`
 
 **Fixes:**
+
 1. **Critical:** `Caddyfile` `handle @abs` does not strip `/abs`, and the dev-only `+server.ts` prefix stripper is absent from the static build — production calls `http://audiobookshelf:80/abs/api/...` → 404 everywhere.
 2. Proxy copies `content-length` after undici decodes a compressed body (`+server.ts:60-65`), corrupting gzipped responses.
 3. Proxy logs and returns the full target URL including `?token=` (`:72-74`).
@@ -403,6 +423,7 @@ it('still recurses when a container has only whitespace direct text', () => {
 14. CLAUDE.md says Vite proxies `/abs/*`; it is the SvelteKit endpoint.
 
 **Interfaces:**
+
 - Consumes: nothing from other tasks.
 - Produces: nothing downstream.
 
@@ -443,18 +464,21 @@ header @immutable Cache-Control "public, max-age=31536000, immutable"
 ### Task 8: Anki mining robustness
 
 **Files:**
+
 - Modify: `src/lib/anki/mine.ts:85-158` (reorder, pure payload builder seam)
 - Modify: `src/lib/anki/capture.ts:295-301,363-368,403` (rig leak, src guard, redaction)
 - Modify: `src/lib/anki/connect.ts:70-72` (validate payload, wrap parse errors)
 - Test: `mine.test.ts`, `capture.test.ts`, `connect.test.ts`
 
 **Fixes:**
+
 1. `mine.ts` calls `storeMediaFile` before `findNewestNote`/`notesInfo` validation, so a missing note or field orphans uploaded media. The payload orchestration is untested.
 2. Failed rig creation leaks the audio element and a permanently connected `MediaElementAudioSourceNode` (`capture.ts:363-368`); an in-flight `rigPromise` is returned even when `src` differs (`:295-301`).
 3. `capture.ts:403` logs the source URL with the ABS token.
 4. `connect.ts:70-72` trusts `payload.result` and surfaces `res.json()` failures as raw `SyntaxError`.
 
 **Interfaces:**
+
 - Produces: a pure `buildMinePayload(...)`-style function (name it as fits) exported for tests, following the injectable-seam pattern from `source.ts`. The function returns the AnkiConnect actions/fields without performing I/O.
 
 - [ ] **Step 1: Write failing tests**
