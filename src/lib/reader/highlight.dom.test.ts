@@ -146,4 +146,18 @@ describe('engine selection', () => {
 
 		expect(el.classList.contains(ACTIVE_CLASS)).toBe(true);
 	});
+
+	it('falls back to classes when the registry exists but Highlight does not', () => {
+		vi.stubGlobal('navigator', { vendor: 'Google Inc.' });
+		vi.stubGlobal('CSS', { highlights: new Map() });
+		// A partial implementation: the registry is there, the constructor is
+		// not, so the native path would throw instead of highlighting.
+		vi.stubGlobal('Highlight', undefined);
+
+		const h = createHighlighter();
+		const el = span('one');
+
+		expect(() => h.activateMany([el])).not.toThrow();
+		expect(el.classList.contains(ACTIVE_CLASS)).toBe(true);
+	});
 });

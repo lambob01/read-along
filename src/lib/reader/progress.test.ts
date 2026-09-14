@@ -108,6 +108,14 @@ describe('formatRemaining', () => {
 		expect(formatRemaining(3600 + 5 * 60)).toBe('1h 5m left');
 	});
 
+	it('rounds the total before splitting into hours', () => {
+		// 3599s is 59.98 minutes. Rounding the remainder alone carries that to
+		// `60m left` and 7199s to `1h 60m left`; the minutes have to roll into
+		// the hour before the split.
+		expect(formatRemaining(3599)).toBe('1h left');
+		expect(formatRemaining(7199)).toBe('2h left');
+	});
+
 	it('rounds a sub-minute up rather than dropping it', () => {
 		expect(formatRemaining(30)).toBe('1m left');
 	});

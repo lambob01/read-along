@@ -73,11 +73,14 @@ export function chapterProgress(
 	};
 }
 
-/** `12m left`, `1h 5m left`, or empty when nothing is left. */
+/** `12m left`, `1h 5m left`, `2h left`, or empty when nothing is left. */
 export function formatRemaining(s: number): string {
 	if (!Number.isFinite(s) || s <= 0) return '';
-	const h = Math.floor(s / 3600);
-	const m = Math.round((s % 3600) / 60);
-	if (h > 0) return `${h}h ${m}m left`;
+	// Round the total first: rounding the remainder alone carries 59.98
+	// minutes to `60m left` and 119.98 to `1h 60m left`.
+	const total = Math.round(s / 60);
+	const h = Math.floor(total / 60);
+	const m = total % 60;
+	if (h > 0) return m > 0 ? `${h}h ${m}m left` : `${h}h left`;
 	return `${m}m left`;
 }

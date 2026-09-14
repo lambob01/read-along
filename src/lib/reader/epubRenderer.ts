@@ -1,28 +1,10 @@
 import type { AlignedIndex, AlignedSentence, EpubChapter } from '$lib/types';
-import { collectProseTextNodes, resolvePath } from '$lib/epub/text';
+import { collectProseTextNodes, NON_PROSE_TAGS, resolvePath } from '$lib/epub/text';
 
 /** Attributes stripped from cloned EPUB nodes. */
 const DROP_ATTRS = ['style', 'class', 'id', 'width', 'height', 'align'];
 /** Attributes that can smuggle code into the document. */
 const DROP_CODE_ATTRS = ['srcdoc', 'src', 'srcset', 'formaction', 'data', 'poster'];
-/**
- * Elements whose presence in a book is executable or form-submitting. Books
- * are downloaded from the web; an EPUB's own markup must not run in this
- * app's origin, where the ABS token lives.
- */
-const DROP_ELEMENTS = new Set([
-	'script',
-	'iframe',
-	'object',
-	'embed',
-	'video',
-	'audio',
-	'form',
-	'link',
-	'style',
-	'base',
-	'meta'
-]);
 
 /**
  * Clones an EPUB element for rendering, discarding publication styling so the
@@ -36,6 +18,7 @@ function cloneForRender(el: Element): HTMLElement {
 	const clone = el.cloneNode(true) as HTMLElement;
 	const all: Element[] = [clone, ...Array.from(clone.querySelectorAll('*'))];
 	for (const node of all) {
+		const tag = node.tagName.toLowerCase();
 		for (const attr of DROP_ATTRS) node.removeAttribute(attr);
 		// Snapshot the attributes: removing them while iterating is fine, but
 		// `attributes` is live. Chapters parse as XML, where attribute names
@@ -47,12 +30,25 @@ function cloneForRender(el: Element): HTMLElement {
 				node.removeAttribute(attr.name);
 			}
 		}
+		if (tag === 'a') {
+			// Anything but a fragment link leaves this app's origin, where the
+			// ABS token lives, and `target` is pointless once the href is
+			// gone. In-book anchors still work, so the page's click handler is
+			// not the only defence against a book's links.
+			for (const attr of Array.from(node.attributes)) {
+				const name = attr.name.toLowerCase();
+				if (name === 'target' || (name === 'href' && !attr.value.startsWith('#'))) {
+					node.removeAttribute(attr.name);
+				}
+			}
+		}
 		// Images inside an EPUB reference zip-internal paths that will not
 		// resolve; drop them rather than render broken placeholders. Tag
-		// names keep their source case under XML, like attribute names.
-		const tag = node.tagName.toLowerCase();
-		if (tag === 'img' || tag === 'svg') node.remove();
-		if (DROP_ELEMENTS.has(tag)) node.remove();
+		// names keep their source case under XML, like attribute names. Every
+		// other non-prose element is the set alignment stripped from the
+		// chapter body, so rendering sees exactly the text it aligned.
+		if (tag === 'img') node.remove();
+		if (NON_PROSE_TAGS.has(node.tagName.toUpperCase())) node.remove();
 	}
 	return clone;
 }
@@ -123,8 +119,6 @@ export interface EpubRenderHandle {
 	spansFor(sentenceId: number): HTMLElement[];
 	/** First span of a sentence, for autoscroll. */
 	elementFor(sentenceId: number): HTMLElement | undefined;
-	/** Spine order of the chapter a sentence belongs to. */
-	chapterOf(sentenceId: number): number | undefined;
 	/** Spine order of the chapter currently filling the viewport. */
 	viewChapter(): number | null;
 	/** Scrolls the reading surface to the start of a chapter. */
@@ -146,8 +140,6 @@ export interface EpubRenderHandle {
 	 * detaches.
 	 */
 	setFollowNarration(on: boolean): void;
-	/** Mounts every chapter. Used when the book is small enough not to window. */
-	mountAll(): void;
 	/**
 	 * Drops the cached placeholder sizes. Call after anything that changes how
 	 * the text lays out — writing mode, font size, line height, column width.
@@ -627,9 +619,6 @@ export function renderEpub(
 			audioAnchor = order;
 			reconcile();
 		},
-		chapterOf(sentenceId: number) {
-			return sentenceChapter.get(sentenceId);
-		},
 		viewChapter() {
 			return viewAnchor;
 		},
@@ -656,6 +645,10 @@ export function renderEpub(
 			const pad = parseFloat(vertical ? style.paddingRight : style.paddingTop) || 0;
 			const target = nearEdge(scroller.getBoundingClientRect(), vertical) + pad;
 			const delta = nearEdge(host.getBoundingClientRect(), vertical) - target;
+			// The same hook the reflow correction fires: whatever watches the
+			// scroller has to know this move was the renderer's, not the
+			// reader's, or the jump is read as a lost correction.
+			opts.onAdjustScroll?.();
 			scroller.scrollTo({
 				top: vertical ? scroller.scrollTop : scroller.scrollTop + delta,
 				left: vertical ? scroller.scrollLeft - delta : scroller.scrollLeft,
@@ -669,10 +662,6 @@ export function renderEpub(
 		},
 		elementFor(sentenceId: number) {
 			return this.spansFor(sentenceId)[0];
-		},
-		mountAll() {
-			const vertical = isVertical();
-			for (const order of orders) mount(order, vertical);
 		},
 		invalidateLayout() {
 			measured.clear();

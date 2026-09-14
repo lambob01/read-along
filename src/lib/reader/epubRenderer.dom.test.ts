@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { renderEpub } from '$lib/reader/epubRenderer';
 import { alignEpubToCues } from '$lib/sync/align';
 import type { EpubDoc, RawCue } from '$lib/types';
@@ -75,6 +75,10 @@ function mountedOrders(container: HTMLElement): string[] {
 function sentenceIn(index: { sentences: { id: number; chapterOrder: number }[] }, order: number) {
 	return index.sentences.find((s) => s.chapterOrder === order)!;
 }
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe('renderEpub', () => {
 	it('creates one host section per chapter in spine order', () => {
@@ -301,17 +305,6 @@ describe('renderEpub', () => {
 		expect(mountedOrders(container)).toEqual(['5', '6', '7']);
 	});
 
-	it('maps a sentence to its chapter', () => {
-		const chapters = Array.from({ length: 3 }, (_, i) => `<p>第${i}章の文。</p>`);
-		const rows = chapters.map(
-			(_, i) => [`第${i}章の文。`, i * 2, i * 2 + 1] as [string, number, number]
-		);
-		const { handle, index } = setup(chapters, rows);
-
-		const inSecond = index.sentences.find((s) => s.chapterOrder === 2)!;
-		expect(handle.chapterOf(inSecond.id)).toBe(2);
-	});
-
 	it('clears the container on destroy', () => {
 		const { handle, container, index } = setup(['<p>本文である。</p>'], [['本文である。', 0, 2]]);
 
@@ -366,5 +359,212 @@ describe('cloneForRender sanitization', () => {
 		// The <video> itself is dropped as an executable element, and nothing
 		// else in the block may carry a code-capable attribute.
 		expect(container.querySelectorAll('.reader-block [src]').length).toBe(0);
+	});
+
+	it('drops javascript: hrefs from cloned links', () => {
+		const { container, handle, index } = setup(
+			['<p>これは<a href="javascript:alert(1)">リンク</a>です。</p>'],
+			[['これはリンクです。', 0, 2]]
+		);
+		handle.ensureVisible(index.sentences[0].id);
+
+		const link = container.querySelector('.reader-block a');
+		expect(link).not.toBeNull();
+		expect(link!.hasAttribute('href')).toBe(false);
+	});
+
+	it('drops external hrefs and their target', () => {
+		const { container, handle, index } = setup(
+			['<p>これは<a href="https://x.test" target="_blank">リンク</a>です。</p>'],
+			[['これはリンクです。', 0, 2]]
+		);
+		handle.ensureVisible(index.sentences[0].id);
+
+		const link = container.querySelector('.reader-block a')!;
+		expect(link.hasAttribute('href')).toBe(false);
+		expect(link.hasAttribute('target')).toBe(false);
+	});
+
+	it('keeps fragment links that stay inside the book', () => {
+		const { container, handle, index } = setup(
+			['<p>これは<a href="#note">リンク</a>です。</p>'],
+			[['これはリンクです。', 0, 2]]
+		);
+		handle.ensureVisible(index.sentences[0].id);
+
+		expect(container.querySelector('.reader-block a')?.getAttribute('href')).toBe('#note');
+	});
+});
+
+/**
+ * Gives the chapter hosts and the scroller real extents and positions along
+ * the reading axis. jsdom reports every rect as zero, which is why the
+ * correction path in `withScrollAnchor` had no cover: at zero the delta is
+ * always below its threshold. Here the viewport sits inside chapter 1 and
+ * mounting chapter 0 above it changes where chapter 1 starts.
+ */
+function stubLayout(opts: {
+	scroller: HTMLElement;
+	vertical: boolean;
+	real: number[];
+	placeholder: number[];
+	viewNear?: number;
+}) {
+	const viewNear = opts.viewNear ?? opts.placeholder[0];
+	const rect = (partial: Partial<DOMRect>) =>
+		({
+			x: 0,
+			y: 0,
+			width: 0,
+			height: 0,
+			top: 0,
+			right: 0,
+			bottom: 0,
+			left: 0,
+			toJSON: () => ({}),
+			...partial
+		}) as DOMRect;
+
+	vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+		if (this === opts.scroller) {
+			return opts.vertical
+				? rect({ right: -viewNear, left: -viewNear - 800, width: 800 })
+				: rect({ top: viewNear, bottom: viewNear + 800, height: 800 });
+		}
+		if (!(this instanceof HTMLElement) || !this.classList.contains('reader-chapter')) {
+			return rect({});
+		}
+
+		let near = 0;
+		for (const section of Array.from(this.parentElement?.children ?? []) as HTMLElement[]) {
+			const order = Number(section.dataset.chapter);
+			const extent = section.children.length > 0 ? opts.real[order] : opts.placeholder[order];
+			if (section === this) {
+				return opts.vertical
+					? rect({ right: -near, left: -near - extent, width: extent })
+					: rect({ top: near, bottom: near + extent, height: extent });
+			}
+			near += extent;
+		}
+		return rect({});
+	});
+}
+
+/** Forces `writing-mode: vertical-rl` on every computed style. */
+function stubVerticalWritingMode() {
+	const real = window.getComputedStyle;
+	vi.spyOn(window, 'getComputedStyle').mockImplementation(((el: Element) => {
+		const style = real.call(window, el);
+		return new Proxy(style, {
+			get: (t, k) => (k === 'writingMode' ? 'vertical-rl' : Reflect.get(t, k))
+		});
+	}) as typeof window.getComputedStyle);
+}
+
+function makeStubScroller() {
+	const scroller = document.createElement('div');
+	document.body.appendChild(scroller);
+
+	const calls: ScrollToOptions[] = [];
+	const events: string[] = [];
+	scroller.scrollTo = ((options?: ScrollToOptions | number) => {
+		if (typeof options !== 'object' || options === null) return;
+		events.push('scroll');
+		calls.push(options);
+		if (options.top !== undefined) scroller.scrollTop = options.top;
+		if (options.left !== undefined) scroller.scrollLeft = options.left;
+	}) as typeof scroller.scrollTo;
+
+	return { scroller, calls, events };
+}
+
+function layoutBook() {
+	const chapters = Array.from({ length: 3 }, (_, i) => `<p>第${i}章の文である。</p>`);
+	const rows = chapters.map(
+		(_, i) => [`第${i}章の文である。`, i * 2, i * 2 + 1] as [string, number, number]
+	);
+	const doc = makeDoc(chapters);
+	const index = alignEpubToCues(doc, makeCues(rows));
+	const container = document.createElement('div');
+	document.body.appendChild(container);
+	const { scroller, calls, events } = makeStubScroller();
+	const handle = renderEpub(index, doc.chapters, container, {
+		scroller,
+		onAdjustScroll: () => events.push('adjust')
+	});
+	return { index, scroller, handle, calls, events };
+}
+
+const REAL_EXTENTS = [400, 600, 600];
+const PLACEHOLDER_EXTENTS = [1000, 1000, 1000];
+
+describe('layout anchoring', () => {
+	it('corrects the shift a mount batch caused above the viewport', () => {
+		const { index, scroller, handle, calls, events } = layoutBook();
+		stubLayout({
+			scroller,
+			vertical: false,
+			real: REAL_EXTENTS,
+			placeholder: PLACEHOLDER_EXTENTS
+		});
+		scroller.scrollTop = 500;
+		scroller.scrollLeft = 500;
+
+		handle.ensureVisible(sentenceIn(index, 0).id);
+
+		// Mounting chapter 0 above the viewport collapsed its placeholder from
+		// 1000px to 400px, moving the anchor chapter up by 600. The correction
+		// scrolls that back out, and the auto-scroller is told before the
+		// scroll or it reads as the reader having left the narration.
+		expect(events).toEqual(['adjust', 'scroll']);
+		expect(calls[0].top).toBe(-100);
+		expect(calls[0].left).toBe(500);
+	});
+
+	it('corrects along the horizontal axis under vertical-rl', () => {
+		stubVerticalWritingMode();
+		const { index, scroller, handle, calls, events } = layoutBook();
+		stubLayout({
+			scroller,
+			vertical: true,
+			real: REAL_EXTENTS,
+			placeholder: PLACEHOLDER_EXTENTS
+		});
+		scroller.scrollTop = 500;
+		scroller.scrollLeft = 500;
+
+		handle.ensureVisible(sentenceIn(index, 0).id);
+
+		// Vertical text scrolls sideways, so the same correction lands on
+		// scrollLeft, with the block-axis delta negated on the way back to
+		// physical pixels.
+		expect(events).toEqual(['adjust', 'scroll']);
+		expect(calls[0].top).toBe(500);
+		expect(calls[0].left).toBe(1100);
+	});
+
+	it('tags the contents jump before scrolling', () => {
+		const { index, scroller, handle, calls, events } = layoutBook();
+		// The viewport starts at chapter 0, so the anchoring batch itself is a
+		// no-op and the only scroll is the contents jump.
+		stubLayout({
+			scroller,
+			vertical: false,
+			real: REAL_EXTENTS,
+			placeholder: PLACEHOLDER_EXTENTS,
+			viewNear: 0
+		});
+
+		handle.ensureVisible(sentenceIn(index, 0).id);
+		events.length = 0;
+		calls.length = 0;
+		scroller.scrollTop = 500;
+		scroller.scrollLeft = 500;
+
+		handle.scrollToChapter(1);
+
+		expect(events).toEqual(['adjust', 'scroll']);
+		expect(calls[0].top).toBe(900);
+		expect(calls[0].left).toBe(500);
 	});
 });

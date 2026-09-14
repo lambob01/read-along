@@ -1,6 +1,5 @@
 export interface HighlightHandle {
 	activate(el: HTMLElement): void;
-	deactivate(el: HTMLElement): void;
 	/**
 	 * Highlights a sentence rendered as several elements. EPUB sentences can
 	 * straddle inline markup (<em>, <ruby>), so one sentence may occupy more
@@ -30,9 +29,6 @@ function createCSSHighlight(): HighlightHandle {
 			// The Custom Highlight API accepts multiple ranges per highlight.
 			// Setting replaces the previous entry, so no separate delete is needed.
 			CSS.highlights.set('active-sentence', new Highlight(...ranges));
-		},
-		deactivate() {
-			this.reset();
 		},
 		reset() {
 			CSS.highlights.delete('active-sentence');
@@ -68,10 +64,6 @@ function createClassHighlight(getRoot: () => ParentNode): HighlightHandle {
 			for (const el of els) el.classList.add(ACTIVE_CLASS);
 			currentEls = [...els];
 		},
-		deactivate(el: HTMLElement) {
-			el.classList.remove(ACTIVE_CLASS);
-			currentEls = currentEls.filter((e) => e !== el);
-		},
 		reset: clearAll
 	};
 }
@@ -98,7 +90,11 @@ export function createHighlighter(options: HighlighterOptions = {}): HighlightHa
 	const getRoot = options.getRoot ?? (() => document);
 	const preferClass = options.preferClassFallback ?? isWebKit();
 
-	const hasNative = typeof CSS !== 'undefined' && Boolean(CSS.highlights);
+	// A partial implementation can expose the registry without the
+	// constructor, and the native path would throw on `new Highlight` before
+	// it painted anything.
+	const hasNative =
+		typeof CSS !== 'undefined' && Boolean(CSS.highlights) && typeof Highlight !== 'undefined';
 	if (hasNative && !preferClass) {
 		return createCSSHighlight();
 	}
