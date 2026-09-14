@@ -12,7 +12,8 @@ describe('sanitize', () => {
 	});
 
 	it('strips bracket blocks', () => {
-		expect(sanitizeText('hello world')).toBe('hello world');
+		expect(sanitizeText('{karaoke}hello')).toBe('hello');
+		expect(sanitizeText('a{}b')).toBe('ab');
 	});
 
 	it('strips word timing tags', () => {
@@ -127,6 +128,22 @@ Second cue`;
 
 		const cues = parseVTT(vtt);
 		expect(cues).toHaveLength(2);
+	});
+
+	it('handles MM:SS.mmm timestamps with the hours component omitted', () => {
+		// WebVTT makes the hours optional, and a one-hour or shorter file
+		// commonly omits it. Before the parser accepted it, every cue in such a
+		// file was dropped.
+		const vtt = `WEBVTT
+
+00:30.500 --> 01:00.000
+Short format`;
+
+		const cues = parseVTT(vtt);
+		expect(cues).toHaveLength(1);
+		expect(cues[0].start).toBe(30.5);
+		expect(cues[0].end).toBe(60);
+		expect(cues[0].text).toBe('Short format');
 	});
 
 	it('strips word timing tags in VTT', () => {

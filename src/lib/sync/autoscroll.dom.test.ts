@@ -68,6 +68,12 @@ function makeSentence(box: { x: number; y: number; w: number; h: number }): HTML
 	return el;
 }
 
+/** A reader gesture: the wheel that starts it, then the scroll it produces. */
+function scroll(container: HTMLElement) {
+	container.dispatchEvent(new Event('wheel'));
+	container.dispatchEvent(new Event('scroll'));
+}
+
 function ioEntry(target: Element, isIntersecting: boolean): IntersectionObserverEntry {
 	return { target, isIntersecting } as unknown as IntersectionObserverEntry;
 }
@@ -204,11 +210,6 @@ describe('detaching', () => {
 	// seconds later, which is what made a book with unmatched audio impossible
 	// to read around: every attempt to move was dragged back.
 
-	function scroll(container: HTMLElement) {
-		container.dispatchEvent(new Event('wheel'));
-		container.dispatchEvent(new Event('scroll'));
-	}
-
 	it('completes a correction queued while suspended instead of detaching', async () => {
 		// Suspension can come from a scroll this scroller did not cause — a
 		// browser adjustment, or the tail of its own smooth animation. Dropping
@@ -335,6 +336,108 @@ describe('detaching', () => {
 
 		expect(onDetach).not.toHaveBeenCalled();
 		s.destroy();
+		vi.useRealTimers();
+	});
+
+	it('does not drag the reader back after an app-driven jump', async () => {
+		// The contents button jumps the reader away from the narration and the
+		// narration moves on while the page is suspended. The line queued in
+		// the meantime must not be applied when the suspension lapses three
+		// seconds later — that snap-back is what made the contents unusable.
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const narration = makeSentence({ x: 0, y: 100, w: 400, h: 40 });
+		const away = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		let el: HTMLElement | undefined = narration;
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		scroll(container);
+		el = away;
+		s.scrollTo(2);
+		scrolls = [];
+		s.markReaderDriven();
+
+		await vi.advanceTimersByTimeAsync(3200);
+
+		expect(scrolls).toEqual([]);
+		// And the move is reported, so the app can stand the narration down.
+		expect(onDetach).toHaveBeenCalledTimes(1);
+		s.destroy();
+		vi.useRealTimers();
+	});
+
+	it('drops a queued line as soon as the app declares the move', async () => {
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const narration = makeSentence({ x: 0, y: 100, w: 400, h: 40 });
+		const queued = makeSentence({ x: 0, y: 500, w: 400, h: 40 });
+		let el: HTMLElement | undefined = narration;
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		scroll(container);
+		el = queued;
+		s.scrollTo(2);
+		scrolls = [];
+		s.markReaderDriven();
+
+		await vi.advanceTimersByTimeAsync(3200);
+
+		// queued is on screen but off the anchor, so applying it would have
+		// scrolled: an empty log proves it was dropped, not merely delayed.
+		expect(scrolls).toEqual([]);
+		expect(onDetach).not.toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+});
+
+describe('unknown geometry', () => {
+	// A zero-size rect means layout has not run for the node — hidden, or not
+	// attached yet. It carries no position, so the scroller must not chase it
+	// (picking a coordinate from it jumps the page somewhere arbitrary) and it
+	// must not read it as the reader having left either.
+	it('leaves a zero-size active element alone', async () => {
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const el = makeSentence({ x: 0, y: 2400, w: 0, h: 0 });
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		expect(scrolls).toEqual([]);
+
+		scroll(container);
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).not.toHaveBeenCalled();
+		s.destroy();
+		vi.useRealTimers();
+	});
+});
+
+describe('destroy', () => {
+	it('clears its timers and stops observing', async () => {
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const el = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		expect(observed.has(el)).toBe(true);
+		scroll(container);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+		s.destroy();
+		expect(vi.getTimerCount()).toBe(0);
+		expect(observed.size).toBe(0);
+
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(onDetach).not.toHaveBeenCalled();
 		vi.useRealTimers();
 	});
 });

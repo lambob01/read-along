@@ -1,8 +1,8 @@
 import type { TimingIndex } from '$lib/types';
+import { lowerBound } from './search';
 
 export interface SyncController {
 	start(): void;
-	stop(): void;
 	seek(time: number): void;
 	/**
 	 * Shifts which sentence is lit for a given audio position. Positive values
@@ -13,9 +13,10 @@ export interface SyncController {
 	setOffset(seconds: number): void;
 	/**
 	 * Turns highlighting off without tearing the controller down. Disabled, it
-	 * clears the active sentence and stops sampling — the audio element is a
-	 * singleton, so `stop()` alone would not hold: its own `play` and
-	 * `timeupdate` listeners would start the loop again on the next tick.
+	 * clears the active sentence and stops sampling — merely clearing the
+	 * loop's timer would not hold: the controller listens to the singleton
+	 * audio element, so its own `play` and `timeupdate` handlers would start
+	 * the loop again on the next tick.
 	 */
 	setEnabled(on: boolean): void;
 	/** Detaches the audio listeners. The audio element outlives this page. */
@@ -75,18 +76,13 @@ export function createSyncController(
 			}
 		}
 
-		let lo = 0;
-		let hi = len - 1;
-		while (lo <= hi) {
-			const mid = (lo + hi) >> 1;
-			if (time < starts[mid]) {
-				hi = mid - 1;
-			} else if (time >= ends[mid]) {
-				lo = mid + 1;
-			} else {
-				cursor = mid;
-				return sentences[cursor].id;
-			}
+		// The covering interval, if any. Starts are sorted and non-overlapping,
+		// so exactly one can contain `time`, and it is the last one to have
+		// started at or before it.
+		const i = lowerBound(starts, time);
+		if (i >= 0 && time < ends[i]) {
+			cursor = i;
+			return sentences[cursor].id;
 		}
 
 		return null;
@@ -139,7 +135,11 @@ export function createSyncController(
 			switchToInterval();
 		} else {
 			evaluate();
-			if (!audio.paused) switchToRAF();
+			// `enabled` is checked as well as `paused`: the audio element is
+			// shared, so it can be playing while read-along is off, and re-arming
+			// here would start the sampling that `setEnabled(false)` promised to
+			// stop.
+			if (enabled && !audio.paused) switchToRAF();
 		}
 	}
 
@@ -214,10 +214,6 @@ export function createSyncController(
 			evaluate();
 			if (!enabled || audio.paused) return;
 			switchToRAF();
-		},
-		stop() {
-			usingRAF = false;
-			clearTimers();
 		},
 		seek(time: number) {
 			cursor = 0;

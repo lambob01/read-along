@@ -1,4 +1,5 @@
 import type { TimingIndex } from '$lib/types';
+import { lowerBound } from './search';
 
 /**
  * Stepping between lines rather than by a fixed number of seconds.
@@ -16,20 +17,8 @@ import type { TimingIndex } from '$lib/types';
  * the same property), so a plain upper-bound search is enough.
  */
 export function cueIndexAt(index: TimingIndex, time: number): number {
-	const { starts } = index;
-	let lo = 0;
-	let hi = starts.length - 1;
-	let found = -1;
-	while (lo <= hi) {
-		const mid = (lo + hi) >> 1;
-		if (starts[mid] <= time) {
-			found = mid;
-			lo = mid + 1;
-		} else {
-			hi = mid - 1;
-		}
-	}
-	return found;
+	// The last line to have started, and so the only one that can cover `time`.
+	return lowerBound(index.starts, time);
 }
 
 /**

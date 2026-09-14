@@ -1,25 +1,25 @@
 import type { RawCue } from '$lib/types';
 import { sanitizeText } from './sanitize';
 
-const SRT_CUE_RE =
-	/(\d+)\s*\n(\d{1,2}:\d{2}:\d{2}[,.]\d{3}|\d{1,2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3}|\d{1,2}:\d{2}[,.]\d{3})\s*\n([\s\S]*?)(?=\n\n|\n*$)/g;
+/**
+ * One timestamp for both formats. SRT separates milliseconds with a comma and
+ * VTT with a dot, and VTT additionally allows the hours component to be
+ * omitted (`mm:ss.mmm`) — the arrow patterns below accept all three shapes, so
+ * only the arithmetic here has to know the difference.
+ */
+const TIMESTAMP = '\\d{1,2}:\\d{2}(?::\\d{2})?[.,]\\d{3}';
+
+const SRT_CUE_RE = new RegExp(
+	`(\\d+)\\s*\\n(${TIMESTAMP})\\s*-->\\s*(${TIMESTAMP})\\s*\\n([\\s\\S]*?)(?=\\n\\n|\\n*$)`,
+	'g'
+);
+
+const VTT_ARROW_RE = new RegExp(`^(${TIMESTAMP})\\s*-->\\s*(${TIMESTAMP})`);
 
 const WEBVTT_HEADER = /^WEBVTT/i;
 
-function parseTimestampSRT(ts: string): number {
-	ts = ts.replace(',', '.');
-	const parts = ts.split(':');
-	if (parts.length === 2) {
-		const [m, s] = parts;
-		return parseInt(m, 10) * 60 + parseFloat(s);
-	}
-	const [h, m, s] = parts;
-	return parseInt(h, 10) * 3600 + parseInt(m, 10) * 60 + parseFloat(s);
-}
-
-function parseTimestampVTT(ts: string): number {
-	ts = ts.replace(',', '.');
-	const parts = ts.split(':');
+function parseTimestamp(ts: string): number {
+	const parts = ts.replace(',', '.').split(':');
 	if (parts.length === 2) {
 		const [m, s] = parts;
 		return parseInt(m, 10) * 60 + parseFloat(s);
@@ -34,8 +34,8 @@ export function parseSRT(raw: string): RawCue[] {
 
 	for (const match of matches) {
 		const index = parseInt(match[1], 10);
-		const start = parseTimestampSRT(match[2]);
-		const end = parseTimestampSRT(match[3]);
+		const start = parseTimestamp(match[2]);
+		const end = parseTimestamp(match[3]);
 		const text = sanitizeText(match[4]);
 		if (Number.isNaN(start) || Number.isNaN(end)) {
 			console.warn(`Malformed cue ${index}: invalid timestamp`);
@@ -66,17 +66,15 @@ function parseVTTBody(body: string): RawCue[] {
 		const arrowLine = lines[startIdx];
 		if (!arrowLine || !arrowLine.includes('-->')) continue;
 
-		const arrowMatch = arrowLine.match(
-			/^(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3})/
-		);
+		const arrowMatch = arrowLine.match(VTT_ARROW_RE);
 
 		if (!arrowMatch) {
 			cueIndex++;
 			continue;
 		}
 
-		const start = parseTimestampVTT(arrowMatch[1]);
-		const end = parseTimestampVTT(arrowMatch[2]);
+		const start = parseTimestamp(arrowMatch[1]);
+		const end = parseTimestamp(arrowMatch[2]);
 
 		if (Number.isNaN(start) || Number.isNaN(end)) {
 			console.warn(`Malformed VTT cue: invalid timestamp`);

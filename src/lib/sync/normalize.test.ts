@@ -28,28 +28,15 @@ describe('normalize', () => {
 		expect(isSkippable('-')).toBe(true);
 	});
 
-	it('maps each normalized char back to its source offset', () => {
-		const src = 'あ、いう';
-		const { chars, sourceIndex } = normalizeStream(src);
-		expect(chars.join('')).toBe('あいう');
-		expect(sourceIndex).toEqual([0, 2, 3]);
-		for (let i = 0; i < chars.length; i++) {
-			expect(src[sourceIndex[i]]).toBe(chars[i]);
-		}
-	});
-
 	it('does not split surrogate pairs', () => {
 		const { chars } = normalizeStream('𠮷野家');
 		expect(chars[0]).toBe('𠮷');
 		expect(chars.length).toBe(3);
 	});
 
-	it('keeps offsets aligned across multi-byte codepoints', () => {
-		const src = '𠮷、野';
-		const { chars, sourceIndex } = normalizeStream(src);
+	it('skips punctuation between multi-byte codepoints without splitting them', () => {
+		const { chars } = normalizeStream('𠮷、野');
 		expect(chars.join('')).toBe('𠮷野');
-		// '𠮷' occupies two UTF-16 units, so '、' sits at index 2 and '野' at 3.
-		expect(sourceIndex).toEqual([0, 3]);
 	});
 });
 

@@ -38,6 +38,16 @@ export interface AutoScroller {
 	 * away — at every chapter boundary, while they sat still and listened.
 	 */
 	noteProgrammaticScroll(): void;
+	/**
+	 * Declares an app-initiated jump (the contents, a chapter link) as the
+	 * reason the page is about to move.
+	 *
+	 * The reader chose to leave the narration, so this is a detach, not a
+	 * correction this scroller owes them: any line queued while suspended is
+	 * dropped rather than applied when the suspension lapses, and the settle
+	 * check reports the move through `onDetach` as if the gesture were theirs.
+	 */
+	markReaderDriven(): void;
 	setOptions(options: Partial<AutoScrollOptions>): void;
 	destroy(): void;
 }
@@ -169,6 +179,9 @@ export function createAutoScroller(
 	function resume() {
 		suspended = false;
 		readerDriven = false;
+		// Coming back to the narration supersedes anything queued while away:
+		// the caller's next `scrollTo` names the line that matters now.
+		pendingId = null;
 		if (suspendTimer) {
 			clearTimeout(suspendTimer);
 			suspendTimer = null;
@@ -202,14 +215,14 @@ export function createAutoScroller(
 	}
 
 	/**
-	 * Scrolls by a delta rather than using scrollIntoView, which only supports
-	 * start/center/end and so cannot honour an arbitrary anchor.
+	 * Scrolls to a destination rather than using scrollIntoView, which only
+	 * supports start/center/end and so cannot honour an arbitrary anchor.
 	 *
-	 * `scrollBy` takes physical deltas, and a positive one always moves the
-	 * viewport towards larger coordinates whatever the scroll origin — so the
-	 * axis-flipped delta is negated back on the way out. That also sidesteps
-	 * `scrollLeft`, whose origin in a right-to-left scroller differs between
-	 * engines.
+	 * The destination is computed on the reading axis and converted back to
+	 * physical coordinates, negating the axis-flipped delta on the way out. It
+	 * is applied to the container's current offset, so `scrollLeft`'s origin
+	 * in a right-to-left scroller never has to be known — the physical delta
+	 * makes it cancel.
 	 */
 	function scrollElementToAnchor(el: HTMLElement) {
 		const r = project(el.getBoundingClientRect());
@@ -232,6 +245,11 @@ export function createAutoScroller(
 
 	function isOutsideDeadZone(el: HTMLElement): boolean {
 		const r = project(el.getBoundingClientRect());
+		// Zero size means layout has not run for this node (hidden, detached):
+		// the rect is no evidence of where the sentence sits, and scrolling to
+		// the coordinate it reports jumps the page somewhere arbitrary. Leave
+		// it to the next attempt, by which time it has a size.
+		if (r.size === 0) return false;
 		const anchor = anchorPoint();
 		const band = project(container.getBoundingClientRect()).size * DEAD_ZONE;
 		return r.far < anchor - band || r.near > anchor + band;
@@ -314,6 +332,16 @@ export function createAutoScroller(
 		resume,
 		noteProgrammaticScroll() {
 			selfScrollUntil = Math.max(selfScrollUntil, now() + SELF_ADJUST_MS);
+		},
+		markReaderDriven() {
+			// Order matters: the flag is set before `scheduleSettleCheck`, whose
+			// callback reads it, and `suspend` restarts the grace window so the
+			// check runs while the reader is still considered in motion.
+			readerDriven = true;
+			selfScrollUntil = 0;
+			pendingId = null;
+			suspend();
+			scheduleSettleCheck();
 		},
 		setOptions(next: Partial<AutoScrollOptions>) {
 			const wasVertical = options.vertical;

@@ -1,5 +1,6 @@
 import type { TimingIndex } from '$lib/types';
 import { cueIndexAt } from './navigate';
+import { upperBound } from './search';
 
 /**
  * Repeat mode: pause at the end of every unit, so it can be re-heard or
@@ -79,6 +80,24 @@ export function createRepeatController(
 	let prevT: number | null = null;
 	/** End of the unit last reported, so a pause is never announced twice. */
 	let lastReportedEnd: number | null = null;
+	/**
+	 * Created only while enabled: repeat is off for most readers, and a 25ms
+	 * interval left running for the page's lifetime is pure waste. `destroy`
+	 * stops it either way, because the controller attaches to the singleton
+	 * audio element.
+	 */
+	let timer: ReturnType<typeof setInterval> | null = null;
+
+	function startTimer() {
+		if (timer === null) timer = setInterval(tick, tickMs);
+	}
+
+	function stopTimer() {
+		if (timer !== null) {
+			clearInterval(timer);
+			timer = null;
+		}
+	}
 
 	function report(unit: ArmedUnit) {
 		armed = null;
@@ -92,23 +111,6 @@ export function createRepeatController(
 		opts.onUnitEnd(unit);
 	}
 
-	/** Smallest k with `ends[k] > x`, or -1 past the last unit. */
-	function firstEndAfter(ends: Float64Array, x: number): number {
-		let lo = 0;
-		let hi = ends.length - 1;
-		let found = -1;
-		while (lo <= hi) {
-			const mid = (lo + hi) >> 1;
-			if (ends[mid] > x) {
-				found = mid;
-				hi = mid - 1;
-			} else {
-				lo = mid + 1;
-			}
-		}
-		return found;
-	}
-
 	function unitAt(idx: TimingIndex, i: number): ArmedUnit {
 		return { id: idx.sentences[i].id, start: idx.starts[i], end: idx.ends[i] };
 	}
@@ -117,19 +119,19 @@ export function createRepeatController(
 		if (!enabled || !index || audio.paused) return;
 		const t = audio.currentTime + opts.getOffset();
 		// `prevT` is deliberately not cleared on pause: resuming has to be able
-		// to see that the position advanced by one tick.
-		const played = prevT !== null && t > prevT && t - prevT <= maxStep;
+		// to see that the position advanced by one tick. The condition is also
+		// the "was this playing or seeking" test, so `from` is narrowed with it.
 		const from = prevT;
 		prevT = t;
 
-		if (played && from !== null) {
+		if (from !== null && t > from && t - from <= maxStep) {
 			// Did a unit finish inside the interval just played? Asking the
 			// question this way — rather than "is the playhead past what we
 			// armed" — is what catches a unit shorter than one tick. Looking up
 			// the unit under the playhead would miss it entirely, because by
 			// then the *next* unit has already begun.
-			const k = firstEndAfter(index.ends, from);
-			if (k >= 0 && index.ends[k] <= t && index.ends[k] !== lastReportedEnd) {
+			const k = upperBound(index.ends, from);
+			if (k < index.ends.length && index.ends[k] <= t && index.ends[k] !== lastReportedEnd) {
 				report(unitAt(index, k));
 				return;
 			}
@@ -156,13 +158,15 @@ export function createRepeatController(
 		lastReportedEnd = null;
 	};
 	audio.addEventListener('seeked', disarm);
-	const timer = setInterval(tick, tickMs);
+	if (enabled) startTimer();
 
 	return {
 		setEnabled(on: boolean) {
 			if (enabled === on) return;
 			enabled = on;
 			disarm();
+			if (on) startTimer();
+			else stopTimer();
 		},
 		setIndex(next: TimingIndex | null) {
 			if (index === next) return;
@@ -170,7 +174,7 @@ export function createRepeatController(
 			disarm();
 		},
 		destroy() {
-			clearInterval(timer);
+			stopTimer();
 			audio.removeEventListener('seeked', disarm);
 			armed = null;
 		},

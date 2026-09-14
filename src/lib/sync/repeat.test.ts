@@ -214,7 +214,7 @@ describe('createRepeatController', () => {
 	// rebuilt whenever the reader store changed, which the sync ticker does on
 	// every line boundary. Re-arming from scratch mid-line dropped the pause and
 	// playback ran on for one, two or three more lines at random.
-	it('keeps what it armed across unrelated churn', () => {
+	it('keeps what it armed across a no-op setEnabled', () => {
 		const c = attach();
 		playTo(audio, 1);
 		expect(c.armed()?.id ?? null).toBe(10);
@@ -222,9 +222,26 @@ describe('createRepeatController', () => {
 		// Whatever else the app does, short of changing the index, must not
 		// disturb the arm.
 		c.setEnabled(true);
+		expect(c.armed()?.id ?? null).toBe(10);
+
+		playTo(audio, 2.01);
+		expect(ended).toEqual([10]);
+		c.destroy();
+	});
+
+	it('disarms when the index is swapped', () => {
+		// Swapping in a different index is a different book (or a rebuilt
+		// unit set): the armed line belongs to the old one and must not fire.
+		const c = attach();
+		playTo(audio, 1);
+		expect(c.armed()?.id ?? null).toBe(10);
+
 		c.setIndex(null);
-		c.setIndex(null);
-		expect(audio.pauseCalls).toBe(0);
+		expect(c.armed()).toBeNull();
+
+		c.setIndex(makeIndex());
+		playTo(audio, 2.5);
+		expect(c.armed()?.id ?? null).toBe(11);
 		c.destroy();
 	});
 
@@ -307,7 +324,29 @@ describe('createRepeatController', () => {
 		playTo(audio, 1);
 		playTo(audio, 2.01);
 		expect(audio.pauseCalls).toBe(0);
+		// Disabled from the start means no interval was ever created, not one
+		// ticking idly for the page's lifetime.
+		expect(vi.getTimerCount()).toBe(0);
 		c.destroy();
+	});
+
+	it('runs its interval only while repeat is enabled', () => {
+		const c = attach();
+		expect(vi.getTimerCount()).toBe(1);
+
+		c.setEnabled(false);
+		expect(vi.getTimerCount()).toBe(0);
+
+		// Switching it back on has to restart the scan, or the fallback arm
+		// would never be reported.
+		c.setEnabled(true);
+		expect(vi.getTimerCount()).toBe(1);
+		playTo(audio, 1);
+		playTo(audio, 2.01);
+		expect(ended).toEqual([10]);
+
+		c.destroy();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it('does not re-fire a unit whose end exactly equals the last reported end', () => {

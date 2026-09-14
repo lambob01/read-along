@@ -70,14 +70,11 @@ export function isSkippable(ch: string): boolean {
 }
 
 /**
- * A normalized character stream that retains a back-pointer per character into
- * the source string, so alignment results can be mapped to original offsets.
+ * A normalized character stream built from source text.
  */
 export interface NormalizedStream {
 	/** Normalized, skippable-free characters. */
 	chars: string[];
-	/** `sourceIndex[i]` is the offset in the source text of `chars[i]`. */
-	sourceIndex: number[];
 }
 
 /**
@@ -97,32 +94,29 @@ const COMBINING_RE = /[\p{M}\uFF9E\uFF9F]/u;
  */
 export function normalizeStream(source: string): NormalizedStream {
 	const chars: string[] = [];
-	const sourceIndex: number[] = [];
 
-	// Group each base codepoint with its trailing combining marks.
-	const clusters: { text: string; offset: number }[] = [];
-	let offset = 0;
+	// Group each base codepoint with its trailing combining marks so
+	// composition (ｶ + ﾞ → ガ) can occur across that boundary in the NFKC pass.
+	const clusters: string[] = [];
 	for (const cp of source) {
 		const prev = clusters[clusters.length - 1];
-		if (prev && COMBINING_RE.test(cp)) {
-			prev.text += cp;
+		if (prev !== undefined && COMBINING_RE.test(cp)) {
+			clusters[clusters.length - 1] = prev + cp;
 		} else {
-			clusters.push({ text: cp, offset });
+			clusters.push(cp);
 		}
-		offset += cp.length;
 	}
 
 	for (const cluster of clusters) {
-		const folded = cluster.text.normalize('NFKC').toLowerCase();
+		const folded = cluster.normalize('NFKC').toLowerCase();
 		for (const ch of folded) {
 			if (!isSkippable(ch)) {
 				chars.push(ch);
-				sourceIndex.push(cluster.offset);
 			}
 		}
 	}
 
-	return { chars, sourceIndex };
+	return { chars };
 }
 
 /** Normalizes text to a bare comparable string, discarding offsets. */

@@ -321,8 +321,8 @@ describe('createSyncController', () => {
 
 	it('goes quiet when read-along is switched off', () => {
 		// Only `setEnabled` will do: the controller listens to a singleton audio
-		// element, so `stop()` leaves its own `timeupdate` and `play` handlers to
-		// start the loop up again on the next tick.
+		// element, so merely clearing the loop's timer would leave its own
+		// `timeupdate` and `play` handlers free to start it up again.
 		const { audio, seen, controller } = setup();
 		audio.currentTime = 1.5;
 		play(audio);
@@ -360,6 +360,37 @@ describe('createSyncController', () => {
 		controller.destroy();
 	});
 
+	it('does not restart the loop on a visibility change while read-along is off', () => {
+		// The audio element is shared, so `audio.paused` cannot stand in for
+		// "read-along is on" — the element can still be playing while the
+		// controller is disabled. Re-arming RAF on show regardless of `enabled`
+		// contradicted "stops sampling": the highlight came back on its own.
+		const { audio, seen, controller } = setup();
+		audio.currentTime = 1.5;
+		play(audio);
+		flushFrames(1);
+		controller.setEnabled(false);
+		// Drains the frame that was already queued when the loop stopped; the
+		// cancellation leaves it in the queue until a flush skips it.
+		flushFrames(1);
+		seen.length = 0;
+
+		hidden = true;
+		document.dispatchEvent(new Event('visibilitychange'));
+		hidden = false;
+		document.dispatchEvent(new Event('visibilitychange'));
+
+		expect(rafQueue).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
+
+		// Nothing samples, then or later.
+		flushFrames(3);
+		vi.advanceTimersByTime(500);
+		expect(seen).toEqual([]);
+
+		controller.destroy();
+	});
+
 	it('detaches its listeners on destroy', () => {
 		const { audio, controller } = setup();
 		expect(audio.listenerCount('play')).toBe(1);
@@ -370,6 +401,29 @@ describe('createSyncController', () => {
 		expect(audio.listenerCount('pause')).toBe(0);
 		expect(audio.listenerCount('ended')).toBe(0);
 		expect(audio.listenerCount('seeked')).toBe(0);
+	});
+
+	it('leaves no frames, timers or visibility listener behind on destroy', () => {
+		// `destroy` is the only teardown the page needs. A lingering
+		// visibilitychange listener would restart sampling on the singleton
+		// audio element after the reader page had gone.
+		const { audio, seen, controller } = setup();
+		audio.currentTime = 1.5;
+		play(audio);
+		flushFrames(1);
+		controller.destroy();
+		seen.length = 0;
+		rafQueue = [];
+
+		hidden = true;
+		document.dispatchEvent(new Event('visibilitychange'));
+		hidden = false;
+		document.dispatchEvent(new Event('visibilitychange'));
+		vi.advanceTimersByTime(500);
+
+		expect(rafQueue).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
+		expect(seen).toEqual([]);
 	});
 
 	it('re-samples immediately on a controller seek', () => {
