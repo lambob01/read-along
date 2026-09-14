@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { applySettingsToDOM, defaultSettings } from '$lib/stores/settings';
+import { applySettingsToDOM, defaultCustomTheme, defaultSettings } from '$lib/stores/settings';
 
 function makeLocalStorage(seed: Record<string, string> = {}) {
 	const data = new Map(Object.entries(seed));
@@ -19,6 +19,7 @@ afterEach(() => {
 describe('settings persistence', () => {
 	beforeEach(() => {
 		vi.resetModules();
+		document.documentElement.removeAttribute('style');
 	});
 
 	// Settings added after a user's last visit are absent from their stored
@@ -41,6 +42,116 @@ describe('settings persistence', () => {
 		expect(s.timingOffset).toBe(defaultSettings.timingOffset);
 		expect(s.scrollAnchor).toBe(defaultSettings.scrollAnchor);
 		expect(s.hlStyle).toBe(defaultSettings.hlStyle);
+	});
+
+	// A stored blob can carry a value of the wrong type: an older version wrote
+	// strings for numbers, or the JSON was hand-edited. Validation happens at
+	// module init, where a throw is a white screen, and a bad key must cost only
+	// itself — not the whole blob of valid preferences around it.
+	it('falls back on a wrongly typed number but keeps valid siblings', async () => {
+		vi.stubGlobal(
+			'localStorage',
+			makeLocalStorage({
+				'reader-settings': JSON.stringify({ theme: 'sepia', fontSize: '1.4' })
+			})
+		);
+
+		const { settings } = await import('$lib/stores/settings');
+		const { get } = await import('svelte/store');
+		const s = get(settings);
+
+		expect(s.theme).toBe('sepia');
+		expect(s.fontSize).toBe(defaultSettings.fontSize);
+	});
+
+	it('falls back on an enum value that is not a member', async () => {
+		vi.stubGlobal(
+			'localStorage',
+			makeLocalStorage({
+				'reader-settings': JSON.stringify({ theme: 'nonsense', fontSize: 1.4 })
+			})
+		);
+
+		const { settings } = await import('$lib/stores/settings');
+		const { get } = await import('svelte/store');
+		const s = get(settings);
+
+		expect(s.theme).toBe(defaultSettings.theme);
+		expect(s.fontSize).toBe(1.4);
+	});
+
+	it('falls back when progressModes is not an array of known modes', async () => {
+		vi.stubGlobal(
+			'localStorage',
+			makeLocalStorage({
+				'reader-settings': JSON.stringify({ progressModes: {}, timingOffset: 2.5 })
+			})
+		);
+
+		const { settings } = await import('$lib/stores/settings');
+		const { get } = await import('svelte/store');
+		const s = get(settings);
+
+		expect(s.progressModes).toEqual(defaultSettings.progressModes);
+		expect(s.timingOffset).toBe(2.5);
+	});
+
+	it('rejects an unknown mode inside an otherwise valid progressModes list', async () => {
+		vi.stubGlobal(
+			'localStorage',
+			makeLocalStorage({
+				'reader-settings': JSON.stringify({ progressModes: ['book-pct', 'bogus'] })
+			})
+		);
+
+		const { settings } = await import('$lib/stores/settings');
+		const { get } = await import('svelte/store');
+
+		expect(get(settings).progressModes).toEqual(defaultSettings.progressModes);
+	});
+
+	it('falls back per custom theme colour, keeping the valid ones', async () => {
+		vi.stubGlobal(
+			'localStorage',
+			makeLocalStorage({
+				'reader-settings': JSON.stringify({
+					theme: 'custom',
+					customTheme: { bg: null, fg: '#ffffff' }
+				})
+			})
+		);
+
+		const { settings } = await import('$lib/stores/settings');
+		const { get } = await import('svelte/store');
+		const s = get(settings);
+
+		expect(s.customTheme.bg).toBe(defaultCustomTheme.bg);
+		expect(s.customTheme.fg).toBe('#ffffff');
+		expect(s.customTheme.accent).toBe(defaultCustomTheme.accent);
+	});
+
+	it('applies a stored valid custom theme to the DOM', async () => {
+		vi.stubGlobal(
+			'localStorage',
+			makeLocalStorage({
+				'reader-settings': JSON.stringify({
+					theme: 'custom',
+					customTheme: {
+						bg: '#112233',
+						fg: '#f0f0f0',
+						accent: '#445566',
+						accentFg: '#000000'
+					}
+				})
+			})
+		);
+
+		await import('$lib/stores/settings');
+
+		const root = document.documentElement;
+		expect(root.style.getPropertyValue('--custom-bg')).toBe('#112233');
+		expect(root.style.getPropertyValue('--custom-fg')).toBe('#f0f0f0');
+		expect(root.style.getPropertyValue('--custom-accent')).toBe('#445566');
 	});
 
 	it('falls back to defaults on corrupt storage', async () => {

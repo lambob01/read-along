@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { safeSetItem } from '$lib/stores/storage';
 
 export interface PlayerState {
 	currentTime: number;
@@ -6,11 +7,11 @@ export interface PlayerState {
 	playing: boolean;
 	rate: number;
 	volume: number;
-	chapter: number;
 }
 
 let audio: HTMLAudioElement | null = null;
 let currentSrc = '';
+let cancelPendingSeek: (() => void) | null = null;
 
 /**
  * Bounds a seek target against the media's duration.
@@ -43,8 +44,7 @@ function createPlayerStore() {
 		duration: 0,
 		playing: false,
 		rate: 1,
-		volume: 1,
-		chapter: 0
+		volume: 1
 	});
 
 	function withAudio<T>(fn: (a: HTMLAudioElement) => T, fallback: T): T {
@@ -91,8 +91,9 @@ function createPlayerStore() {
 		 *
 		 * Resuming races the metadata load, and a big remote file can take many
 		 * seconds to answer. The element is a singleton shared between books, so
-		 * a pending seek is dropped if the source changes under it — otherwise
-		 * opening a second book could inherit the first one's position.
+		 * at most one request may be pending: a second call, or a source change,
+		 * cancels the previous registration rather than letting stale listeners
+		 * pile up and fire against the wrong book.
 		 */
 		seekWhenReady(time: number) {
 			withAudio((a) => {
@@ -100,17 +101,20 @@ function createPlayerStore() {
 					player.seek(time);
 					return;
 				}
+				cancelPendingSeek?.();
 				const srcAtRequest = currentSrc;
-				const cleanup = () => {
+				function cancel() {
 					a.removeEventListener('loadedmetadata', onReady);
-					a.removeEventListener('error', cleanup);
-				};
+					a.removeEventListener('error', cancel);
+					if (cancelPendingSeek === cancel) cancelPendingSeek = null;
+				}
 				function onReady() {
-					cleanup();
+					cancel();
 					if (currentSrc === srcAtRequest) player.seek(time);
 				}
+				cancelPendingSeek = cancel;
 				a.addEventListener('loadedmetadata', onReady);
-				a.addEventListener('error', cleanup);
+				a.addEventListener('error', cancel);
 			}, undefined);
 		},
 		setRate(rate: number) {
@@ -136,9 +140,6 @@ function createPlayerStore() {
 				a.currentTime = clampSeek(a.currentTime + seconds, a.duration);
 			}, undefined);
 		},
-		setChapter(n: number) {
-			update((s) => ({ ...s, chapter: n }));
-		},
 		/**
 		 * Seeds the displayed position before the media loads.
 		 *
@@ -161,6 +162,9 @@ function createPlayerStore() {
 			}));
 		},
 		setSrc(url: string) {
+			// A pending seek belongs to whatever source asked for it; carrying it
+			// into the new one would seek the new book to the old book's position.
+			cancelPendingSeek?.();
 			currentSrc = url;
 			// The store keeps the previous book's position until the new
 			// source's first timeupdate — many seconds on a slow remote file,
@@ -169,7 +173,13 @@ function createPlayerStore() {
 			// book. Zero it the moment the source changes.
 			update((s) => ({ ...s, currentTime: 0, duration: 0, playing: false }));
 			withAudio((a) => {
-				a.src = url;
+				if (url) {
+					a.src = url;
+				} else {
+					// Assigning '' resolves to the document URL, which would make
+					// the element try to play the app itself.
+					a.removeAttribute('src');
+				}
 				a.load();
 			}, undefined);
 			initEvents();
@@ -186,10 +196,9 @@ function createPlayerStore() {
 			return currentSrc;
 		},
 		saveBookmark(itemId: string, time: number) {
-			if (typeof localStorage === 'undefined') return;
 			const bookmarks = loadBookmarks();
 			bookmarks[itemId] = time;
-			localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+			safeSetItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
 		},
 		getBookmark(itemId: string): number | null {
 			const bookmarks = loadBookmarks();

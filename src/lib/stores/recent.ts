@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { safeSetItem } from '$lib/stores/storage';
 
 export interface RecentBook {
 	itemId: string;
@@ -36,8 +37,7 @@ function load(): RecentBook[] {
 }
 
 function persist(list: RecentBook[]) {
-	if (typeof localStorage === 'undefined') return;
-	localStorage.setItem(KEY, JSON.stringify(list));
+	safeSetItem(KEY, JSON.stringify(list));
 }
 
 function createRecentStore() {
@@ -51,13 +51,6 @@ function createRecentStore() {
 			update((list) => {
 				const rest = list.filter((b) => b.itemId !== entry.itemId);
 				const next = [{ ...entry, updatedAt: Date.now() }, ...rest].slice(0, MAX_ENTRIES);
-				persist(next);
-				return next;
-			});
-		},
-		remove(itemId: string) {
-			update((list) => {
-				const next = list.filter((b) => b.itemId !== itemId);
 				persist(next);
 				return next;
 			});

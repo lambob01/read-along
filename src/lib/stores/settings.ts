@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 import { DEFAULT_ANKI_URL } from '$lib/anki/connect';
-import type { ProgressMode } from '$lib/reader/progress';
+import { PROGRESS_MODES, type ProgressMode } from '$lib/reader/progress';
+import { safeSetItem } from '$lib/stores/storage';
 
 export const themeOptions = [
 	{ value: 'light', label: 'Light' },
@@ -246,26 +247,115 @@ export const defaultSettings: SettingsState = {
 
 const STORAGE_KEY = 'reader-settings';
 
+/** Every colour the pickers round-trip; see `seedFrom` for the same form. */
+const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+	return typeof value === 'string';
+}
+
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isBoolean(value: unknown): value is boolean {
+	return typeof value === 'boolean';
+}
+
+function oneOf<T extends string>(values: readonly T[]) {
+	return (value: unknown): value is T =>
+		typeof value === 'string' && (values as readonly string[]).includes(value);
+}
+
+const HIGHLIGHT_STYLES: readonly HighlightStyle[] = ['background', 'underline', 'text', 'none'];
+
+type PlainSettingKey = Exclude<keyof SettingsState, 'customTheme'>;
+
 /**
- * Reads persisted settings over the defaults. Merging rather than replacing
- * matters because settings added after a user's last visit would otherwise
- * deserialize as undefined and reach the DOM as "undefined" CSS values.
+ * One check per key of the persisted blob. Settings are written by the app
+ * itself, but a blob can also be hand-edited, truncated by a failed write, or
+ * left behind by an older version with a different shape — and it is read at
+ * module init, where a bad value throws before any UI can catch it. Checking
+ * each key on its own means a bad one falls back alone rather than discarding
+ * the valid preferences around it.
  */
+const validators: { [K in PlainSettingKey]: (value: unknown) => boolean } = {
+	theme: oneOf(themeOptions.map((t) => t.value)),
+	fontSize: isFiniteNumber,
+	lineHeight: isFiniteNumber,
+	fontFamily: isString,
+	maxWidth: isFiniteNumber,
+	sideMargins: isFiniteNumber,
+	paragraphSpacing: isFiniteNumber,
+	justify: isBoolean,
+	verticalText: isBoolean,
+	verticalWidth: isFiniteNumber,
+	hlBg: isString,
+	hlFg: isString,
+	hlStyle: oneOf(HIGHLIGHT_STYLES),
+	scrollAnchor: isFiniteNumber,
+	smoothScroll: isBoolean,
+	autoHideChrome: isBoolean,
+	readAlong: isBoolean,
+	progressModes: (value) => Array.isArray(value) && value.every(oneOf(PROGRESS_MODES)),
+	reverseProgressVertical: isBoolean,
+	mirrorControlsVertical: isBoolean,
+	timingOffset: isFiniteNumber,
+	gapThreshold: isFiniteNumber,
+	showNonSpeech: isBoolean,
+	arrowKeys: oneOf(arrowKeyOptions.map((o) => o.value)),
+	seekStep: isFiniteNumber,
+	repeatMode: isBoolean,
+	repeatWholeQuotes: isBoolean,
+	ankiEnabled: isBoolean,
+	ankiUrl: isString,
+	ankiKey: isString,
+	ankiMode: oneOf(ankiModeOptions.map((o) => o.value)),
+	ankiLastCardQuery: isString,
+	ankiAudioField: isString,
+	ankiSentenceField: isString,
+	ankiUpdateSentence: isBoolean,
+	ankiDeck: isString,
+	ankiModel: isString,
+	ankiTags: isString,
+	ankiPadStart: isFiniteNumber,
+	ankiPadEnd: isFiniteNumber,
+	ankiPauseAfter: oneOf(minePauseOptions.map((o) => o.value))
+};
+
+/**
+ * Validates a parsed settings blob key by key and merges the accepted values
+ * over the defaults. Merging rather than replacing matters because settings
+ * added after a user's last visit would otherwise deserialize as undefined and
+ * reach the DOM as "undefined" CSS values; `customTheme` is merged a second
+ * time per colour so one unreadable swatch cannot drop the other three.
+ */
+export function sanitizeSettings(parsed: unknown): SettingsState {
+	const raw = isRecord(parsed) ? parsed : {};
+	const next: SettingsState = { ...defaultSettings, customTheme: { ...defaultCustomTheme } };
+	for (const key of Object.keys(validators) as PlainSettingKey[]) {
+		const value = raw[key];
+		if (validators[key](value)) (next as unknown as Record<string, unknown>)[key] = value;
+	}
+	const custom = isRecord(raw.customTheme) ? raw.customTheme : {};
+	for (const key of Object.keys(defaultCustomTheme) as (keyof CustomTheme)[]) {
+		const value = custom[key];
+		if (typeof value === 'string' && COLOR_PATTERN.test(value)) next.customTheme[key] = value;
+	}
+	return next;
+}
+
 function loadSettings(): SettingsState {
-	if (typeof localStorage === 'undefined') return { ...defaultSettings };
+	if (typeof localStorage === 'undefined') return sanitizeSettings(null);
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return { ...defaultSettings };
-		const parsed = JSON.parse(raw) as Partial<SettingsState>;
-		// `customTheme` is the one nested object here, so the top-level spread
-		// would drop any colour added after the user last saved.
-		return {
-			...defaultSettings,
-			...parsed,
-			customTheme: { ...defaultCustomTheme, ...(parsed.customTheme ?? {}) }
-		};
+		return sanitizeSettings(raw ? JSON.parse(raw) : null);
 	} catch {
-		return { ...defaultSettings };
+		return sanitizeSettings(null);
 	}
 }
 
@@ -314,9 +404,7 @@ function createSettingsStore() {
 	const { subscribe, set, update } = writable<SettingsState>(loadSettings());
 
 	function persist(s: SettingsState) {
-		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-		}
+		safeSetItem(STORAGE_KEY, JSON.stringify(s));
 		applySettingsToDOM(s);
 	}
 

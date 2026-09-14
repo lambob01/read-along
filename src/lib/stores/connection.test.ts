@@ -24,7 +24,7 @@ describe('connection store persistence', () => {
 	it('falls back to defaults on corrupt storage', async () => {
 		vi.stubGlobal('localStorage', makeLocalStorage({ 'reader-connection': '{oops' }));
 		const { connection } = await import('$lib/stores/connection');
-		expect(get(connection)).toEqual({ url: '', token: '', connected: false });
+		expect(get(connection)).toEqual({ token: '', connected: false });
 	});
 
 	it('falls back to defaults when the stored value is not an object', async () => {
@@ -37,10 +37,42 @@ describe('connection store persistence', () => {
 		vi.stubGlobal(
 			'localStorage',
 			makeLocalStorage({
-				'reader-connection': JSON.stringify({ url: '', token: 'abc', connected: true })
+				'reader-connection': JSON.stringify({ token: 'abc', connected: true })
 			})
 		);
 		const { connection } = await import('$lib/stores/connection');
+		expect(get(connection)).toEqual({ token: 'abc', connected: true });
+	});
+
+	it('persists a connection and clears it on disconnect', async () => {
+		const storage = makeLocalStorage();
+		vi.stubGlobal('localStorage', storage);
+		const { connection } = await import('$lib/stores/connection');
+
+		connection.connect('abc');
+		expect(get(connection)).toEqual({ token: 'abc', connected: true });
+		expect(JSON.parse(storage.getItem('reader-connection')!)).toEqual({
+			token: 'abc',
+			connected: true
+		});
+
+		connection.disconnect();
+		expect(get(connection)).toEqual({ token: '', connected: false });
+		expect(JSON.parse(storage.getItem('reader-connection')!)).toEqual({
+			token: '',
+			connected: false
+		});
+	});
+
+	it('does not throw when storage refuses the write', async () => {
+		const storage = makeLocalStorage();
+		storage.setItem = () => {
+			throw new DOMException('quota exceeded', 'QuotaExceededError');
+		};
+		vi.stubGlobal('localStorage', storage);
+		const { connection } = await import('$lib/stores/connection');
+
+		expect(() => connection.connect('abc')).not.toThrow();
 		expect(get(connection).token).toBe('abc');
 	});
 });

@@ -2,8 +2,6 @@ import { writable } from 'svelte/store';
 import type { ABSItem, TimingIndex } from '$lib/types';
 
 export interface ReaderState {
-	loading: boolean;
-	error: string | null;
 	item: ABSItem | null;
 	/** Timing source, from either subtitle cues or EPUB alignment. */
 	cueIndex: TimingIndex | null;
@@ -13,8 +11,6 @@ export interface ReaderState {
 
 function createReaderStore() {
 	const { subscribe, set, update } = writable<ReaderState>({
-		loading: false,
-		error: null,
 		item: null,
 		cueIndex: null,
 		sentenceMap: null,
@@ -35,16 +31,8 @@ function createReaderStore() {
 		setItem(item: ABSItem) {
 			update((s) => ({ ...s, item }));
 		},
-		setLoading(loading: boolean) {
-			update((s) => ({ ...s, loading }));
-		},
-		setError(error: string | null) {
-			update((s) => ({ ...s, error }));
-		},
 		reset() {
 			set({
-				loading: false,
-				error: null,
 				item: null,
 				cueIndex: null,
 				sentenceMap: null,

@@ -19,11 +19,23 @@ class FakeAudio {
 	paused = true;
 	playbackRate = 1;
 	preservesPitch = true;
-	src = '';
 	dataset: Record<string, string> = {};
 	readyState = 0;
 	loadCalls = 0;
 	listeners = new Map<string, Set<() => void>>();
+	attributes = new Map<string, string>();
+	get src() {
+		return this.attributes.get('src') ?? '';
+	}
+	set src(value: string) {
+		this.attributes.set('src', value);
+	}
+	hasAttribute(name: string) {
+		return this.attributes.has(name);
+	}
+	removeAttribute(name: string) {
+		this.attributes.delete(name);
+	}
 	load() {
 		this.loadCalls++;
 	}
@@ -43,6 +55,8 @@ class FakeAudio {
 beforeEach(() => {
 	vi.stubGlobal('localStorage', makeLocalStorage());
 	vi.stubGlobal('Audio', FakeAudio);
+	// `seekWhenReady` gates on the media constant, which node does not define.
+	vi.stubGlobal('HTMLMediaElement', { HAVE_METADATA: 1 });
 });
 
 afterEach(() => {
@@ -181,5 +195,68 @@ describe('player store', () => {
 		player.setPosition(60, -5);
 
 		expect(get(player).duration).toBe(0);
+	});
+
+	it('seekWhenReady replaces a pending registration instead of stacking listeners', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		const a = player.getAudioElement() as unknown as FakeAudio;
+		player.seekWhenReady(30);
+		player.seekWhenReady(60);
+
+		// Two calls before metadata mean one pending request, not two competing
+		// listeners. The element is a singleton shared by every book, so a stale
+		// registration would otherwise survive for the life of the page.
+		expect(a.listeners.get('loadedmetadata')?.size ?? 0).toBe(1);
+		expect(a.listeners.get('error')?.size ?? 0).toBe(1);
+
+		a.dispatchEvent(new Event('loadedmetadata'));
+
+		expect(a.currentTime).toBe(60);
+		expect(a.listeners.get('loadedmetadata')?.size ?? 0).toBe(0);
+		expect(a.listeners.get('error')?.size ?? 0).toBe(0);
+	});
+
+	it('seekWhenReady drops a pending seek when the source changes', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		const a = player.getAudioElement() as unknown as FakeAudio;
+		player.setSrc('book-a.mp3');
+		player.seekWhenReady(300);
+		player.setSrc('book-b.mp3');
+
+		// The request belongs to the old source. Leaving it attached would seek
+		// the new book to the old book's position when its metadata lands.
+		expect(a.listeners.get('loadedmetadata')?.size ?? 0).toBe(0);
+		expect(a.listeners.get('error')?.size ?? 0).toBe(0);
+	});
+
+	it('seekWhenReady drops its listeners when loading fails', async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		const a = player.getAudioElement() as unknown as FakeAudio;
+		player.seekWhenReady(30);
+		a.dispatchEvent(new Event('error'));
+
+		expect(a.listeners.get('loadedmetadata')?.size ?? 0).toBe(0);
+		expect(a.listeners.get('error')?.size ?? 0).toBe(0);
+	});
+
+	it("setSrc('') removes the src attribute instead of pointing at the page", async () => {
+		vi.resetModules();
+		const { player } = await import('$lib/stores/player');
+
+		player.setSrc('book-a.mp3');
+		const a = player.getAudioElement() as unknown as FakeAudio;
+		expect(a.hasAttribute('src')).toBe(true);
+
+		// Assigning '' makes the element resolve the empty URL to the document
+		// URL, so a torn-down reader would try to load the app as its audio.
+		player.setSrc('');
+		expect(a.hasAttribute('src')).toBe(false);
+		expect(a.loadCalls).toBe(2);
 	});
 });

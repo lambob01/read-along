@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { safeSetItem } from '$lib/stores/storage';
 
 const STORAGE_KEY = 'reader-offsets';
 
@@ -39,15 +40,13 @@ function createOffsetStore() {
 	});
 
 	function persist(next: Record<string, number>) {
-		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-		}
+		safeSetItem(STORAGE_KEY, JSON.stringify(next));
 		return next;
 	}
 
-	return {
+	const store = {
 		subscribe,
-		/** Re-reads persisted state. Used on cross-tab updates and by tests. */
+		/** Re-reads persisted state. Called by the cross-tab listener and tests. */
 		hydrate() {
 			set(load());
 		},
@@ -68,6 +67,16 @@ function createOffsetStore() {
 			});
 		}
 	};
+
+	if (typeof window !== 'undefined') {
+		// `setItem` only fires this in *other* tabs, so the store can never
+		// hear its own writes; a null key means the other tab called clear().
+		window.addEventListener('storage', (event) => {
+			if (event.key === null || event.key === STORAGE_KEY) store.hydrate();
+		});
+	}
+
+	return store;
 }
 
 export const offsets = createOffsetStore();

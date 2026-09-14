@@ -1,4 +1,5 @@
 import { writable, type Writable } from 'svelte/store';
+import { safeSetItem } from '$lib/stores/storage';
 
 function persisted<T>(key: string, defaultValue: T): Writable<T> {
 	// The store is read at module init, so a corrupt value here throws before
@@ -18,24 +19,20 @@ function persisted<T>(key: string, defaultValue: T): Writable<T> {
 
 	const store = writable<T>(initial);
 
-	if (typeof localStorage !== 'undefined') {
-		store.subscribe((value) => {
-			localStorage.setItem(key, JSON.stringify(value));
-		});
-	}
+	store.subscribe((value) => {
+		safeSetItem(key, JSON.stringify(value));
+	});
 
 	return store;
 }
 
 export interface ConnectionState {
-	url: string;
 	token: string;
 	connected: boolean;
 }
 
 function createConnectionStore() {
 	const { subscribe, set, update } = persisted<ConnectionState>('reader-connection', {
-		url: '',
 		token: '',
 		connected: false
 	});
@@ -43,10 +40,10 @@ function createConnectionStore() {
 	return {
 		subscribe,
 		connect(token: string) {
-			set({ url: '', token, connected: true });
+			set({ token, connected: true });
 		},
 		disconnect() {
-			set({ url: '', token: '', connected: false });
+			set({ token: '', connected: false });
 		},
 		set
 	};
