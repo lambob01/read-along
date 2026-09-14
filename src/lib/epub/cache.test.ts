@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { alignmentKey, rebuildIndex } from '$lib/epub/cache';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { alignmentKey, loadAlignment, rebuildIndex } from '$lib/epub/cache';
 import type { AlignedSentence } from '$lib/types';
 
 function sentence(id: number, start: number, end: number, timed = true): AlignedSentence {
@@ -139,5 +139,76 @@ describe('rebuildIndex invariants', () => {
 		});
 		expect(index.timed).toHaveLength(1);
 		expect(Array.from(index.starts)).toEqual([1]);
+	});
+
+	it('clears timed on a sentence it drops for zero width', () => {
+		// A sentence absent from the timing arrays must not stay flagged as
+		// timed, or the renderer marks it highlightable while the ticker can
+		// never find it.
+		const index = rebuildIndex({
+			...base,
+			sentences: [sentence(0, 5, 5), sentence(1, 6, 8)]
+		});
+		expect(index.sentences[0].timed).toBe(false);
+		expect(index.sentences[1].timed).toBe(true);
+	});
+
+	it('clears timed on an overlap it drops as degenerate', () => {
+		const index = rebuildIndex({
+			...base,
+			sentences: [sentence(0, 1, 10), sentence(1, 2, 4)]
+		});
+		expect(index.sentences[0].timed).toBe(true);
+		expect(index.sentences[1].timed).toBe(false);
+	});
+
+	it('keeps timed on an overlap it only clamps forward', () => {
+		const index = rebuildIndex({
+			...base,
+			sentences: [sentence(0, 1, 10), sentence(1, 2, 15)]
+		});
+		expect(index.sentences[0].timed).toBe(true);
+		expect(index.sentences[1].timed).toBe(true);
+	});
+});
+
+describe('openDb', () => {
+	interface FakeOpenRequest {
+		onupgradeneeded: (() => void) | null;
+		onsuccess: (() => void) | null;
+		onerror: (() => void) | null;
+		onblocked: (() => void) | null;
+		result: unknown;
+	}
+
+	function fakeOpenRequest(): FakeOpenRequest {
+		return { onupgradeneeded: null, onsuccess: null, onerror: null, onblocked: null, result: null };
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it('resolves null when a version upgrade is blocked', async () => {
+		const request = fakeOpenRequest();
+		vi.stubGlobal('indexedDB', { open: () => request });
+
+		const pending = loadAlignment('blocked');
+		expect(request.onblocked).toBeTypeOf('function');
+
+		request.onblocked?.();
+		await expect(pending).resolves.toBeNull();
+	});
+
+	it('resolves null when opening the database never settles', async () => {
+		vi.useFakeTimers();
+		const request = fakeOpenRequest();
+		vi.stubGlobal('indexedDB', { open: () => request });
+
+		const pending = loadAlignment('stuck');
+		await vi.advanceTimersByTimeAsync(60_000);
+
+		await expect(pending).resolves.toBeNull();
 	});
 });

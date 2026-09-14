@@ -28,8 +28,10 @@ interface CachedAlignment {
  * 4: the leap is measured to where a sentence's cues ended, not to where its
  *    first character matched, so a locally matched opening followed by a far
  *    re-anchor is corroborated too.
+ * 5: text collection keeps direct text in mixed containers, and parsing strips
+ *    the same non-prose elements rendering drops, so block offsets changed.
  */
-const ALGORITHM_VERSION = 4;
+const ALGORITHM_VERSION = 5;
 
 /**
  * Cache key incorporating both source file sizes: replacing either the EPUB or
@@ -43,10 +45,27 @@ export function alignmentKey(
 	return `${itemId}:${epubSize ?? 0}:${subSize ?? 0}`;
 }
 
+/** Give an open request this long before treating the cache as unavailable. */
+const DB_OPEN_TIMEOUT_MS = 3000;
+
 function openDb(): Promise<IDBDatabase | null> {
 	if (typeof indexedDB === 'undefined') return Promise.resolve(null);
 
 	return new Promise((resolve) => {
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout>;
+		const finish = (db: IDBDatabase | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(db);
+		};
+
+		// Caching is an optimisation; a failure must not break reading. A
+		// blocked upgrade or a request that never settles would otherwise
+		// leave the reader waiting forever.
+		timer = setTimeout(() => finish(null), DB_OPEN_TIMEOUT_MS);
+
 		const req = indexedDB.open(DB_NAME, DB_VERSION);
 		req.onupgradeneeded = () => {
 			const db = req.result;
@@ -54,9 +73,17 @@ function openDb(): Promise<IDBDatabase | null> {
 				db.createObjectStore(STORE, { keyPath: 'key' });
 			}
 		};
-		req.onsuccess = () => resolve(req.result);
-		// Caching is an optimisation; a failure must not break reading.
-		req.onerror = () => resolve(null);
+		req.onsuccess = () => {
+			// Another tab's blocked upgrade may let this one through after we
+			// gave up; close the late connection so it blocks nobody else.
+			if (settled) {
+				req.result.close();
+				return;
+			}
+			finish(req.result);
+		};
+		req.onerror = () => finish(null);
+		req.onblocked = () => finish(null);
 	});
 }
 
@@ -122,11 +149,19 @@ export function rebuildIndex(cached: CachedAlignment): AlignedIndex {
 	const timed: AlignedSentence[] = [];
 	let prevEnd = -Infinity;
 	for (const s of candidates) {
-		if (s.end <= s.start) continue;
+		// A dropped sentence must lose its flag too, or the reader renders it
+		// as timed although the ticker's arrays can never find it.
+		if (s.end <= s.start) {
+			s.timed = false;
+			continue;
+		}
 		if (s.start < prevEnd) {
 			// Overlaps the previous sentence: clamp forward if that leaves a
 			// usable range, otherwise drop it, exactly as finalize does.
-			if (s.end - prevEnd < 0.05) continue;
+			if (s.end - prevEnd < 0.05) {
+				s.timed = false;
+				continue;
+			}
 			s.start = prevEnd;
 		}
 		timed.push(s);

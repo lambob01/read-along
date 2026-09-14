@@ -49,7 +49,7 @@ Two modes, selected automatically at load time:
 1. **`epub` mode** (preferred): downloads the EPUB and a subtitle file (SRT/VTT), aligns them via `alignEpubToCues`, caches the result in IndexedDB. The EPUB supplies rich structure (real paragraphs, ruby, headings); the subtitle supplies timing.
 2. **`subtitle` mode** (fallback): uses only the subtitle file; `mergeCues` groups raw cues into paragraphs by audio gap size.
 
-Mode falls back to subtitle when: no EPUB is attached, EPUB parse fails, or alignment coverage drops below 40%.
+Mode falls back to subtitle when: no EPUB is attached, EPUB parse fails, or alignment coverage drops below 40%. A below-40% alignment is cached too, so the fallback is decided once per file pair rather than re-aligned on every load.
 
 ### Sync loop (`src/lib/sync/ticker.ts`)
 

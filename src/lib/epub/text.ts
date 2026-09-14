@@ -1,7 +1,7 @@
 /** Elements whose text is furigana/annotation, not prose. */
 const ANNOTATION_TAGS = new Set(['RT', 'RP']);
 
-/** Inline elements that do not introduce a block boundary. */
+/** Block-level elements, each a separate block in reading order. */
 const BLOCK_TAGS = new Set([
 	'P',
 	'H1',
@@ -16,6 +16,27 @@ const BLOCK_TAGS = new Set([
 	'DT',
 	'FIGCAPTION',
 	'PRE'
+]);
+
+/**
+ * Elements that carry no reading content. Alignment strips these from the
+ * chapter bodies before computing offsets, so rendering must drop the same
+ * set — otherwise the clone it wraps has text the offsets never saw.
+ *
+ * Tag names are uppercase; compare `tagName.toUpperCase()` against them.
+ */
+export const NON_PROSE_TAGS = new Set([
+	'SCRIPT',
+	'STYLE',
+	'LINK',
+	'META',
+	'SVG',
+	'VIDEO',
+	'AUDIO',
+	'IFRAME',
+	'OBJECT',
+	'EMBED',
+	'FORM'
 ]);
 
 /**
@@ -48,32 +69,55 @@ export function blockPlainText(root: Node): string {
 		.join('');
 }
 
+/** Whether the element has a text child that is not pure whitespace. */
+function hasDirectText(el: Element): boolean {
+	for (const child of Array.from(el.childNodes)) {
+		if (child.nodeType === Node.TEXT_NODE && (child as Text).data.trim().length > 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /**
  * Returns the block-level elements of a chapter body in reading order, along
- * with their child-index path from the body. Nested blocks are not emitted
- * twice: the outermost matching element wins.
+ * with their child-index path from the body.
+ *
+ * A BLOCK_TAG is a block on its own. Any other element that directly contains
+ * text is treated as one too, so `<div>前置き <em>強調</em> 後ろ</div>` is a
+ * single block rather than just the `<em>`; a container of pure markup and
+ * whitespace is transparent and its children are walked. The outermost
+ * element wins: a block is never emitted twice, and the nested blocks of a
+ * mixed container are not split out of it.
  */
 export function collectBlocks(body: Element): { el: Element; path: number[] }[] {
 	const out: { el: Element; path: number[] }[] = [];
 
+	const emit = (node: Element, path: number[]) => {
+		if (blockPlainText(node).trim().length > 0) {
+			out.push({ el: node, path });
+		}
+	};
+
 	const walk = (node: Element, path: number[]) => {
-		const children = Array.from(node.children);
 		const tag = node.tagName.toUpperCase();
 
 		if (BLOCK_TAGS.has(tag)) {
-			if (blockPlainText(node).trim().length > 0) {
-				out.push({ el: node, path });
-			}
+			emit(node, path);
 			return;
 		}
 
-		for (let i = 0; i < children.length; i++) {
-			walk(children[i], [...path, i]);
+		// Direct text makes this node a block in its own right: walking on
+		// would drop that text, and emitting both it and its block children
+		// would duplicate the children's prose across two blocks.
+		if (hasDirectText(node)) {
+			emit(node, path);
+			return;
 		}
 
-		// A container holding bare text (no block children) is itself a block.
-		if (children.length === 0 && blockPlainText(node).trim().length > 0) {
-			out.push({ el: node, path });
+		const children = Array.from(node.children);
+		for (let i = 0; i < children.length; i++) {
+			walk(children[i], [...path, i]);
 		}
 	};
 

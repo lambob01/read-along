@@ -28,6 +28,19 @@ export interface TextSource {
  */
 const MIN_USABLE_COVERAGE = 0.4;
 
+/** Injectable alignment cache, so tests can observe reads and writes. */
+export interface AlignmentCache {
+	load: (key: string) => Promise<AlignedIndex | null>;
+	save: (key: string, index: AlignedIndex) => Promise<void>;
+}
+
+const defaultAlignmentCache: AlignmentCache = { load: loadAlignment, save: saveAlignment };
+
+function unusableNotice(coverage: number): string {
+	const pct = Math.round(coverage * 100);
+	return `EPUB matched only ${pct}% of the audio; it may be a different edition. Using subtitle text.`;
+}
+
 /**
  * Resolves the text and timing sources for an item.
  *
@@ -39,7 +52,8 @@ export async function loadTextSource(
 	client: ABSClient,
 	itemId: string,
 	sources?: ItemSources,
-	fetchFileText: (client: ABSClient, itemId: string, ino: string) => Promise<string> = getFileText
+	fetchFileText: (client: ABSClient, itemId: string, ino: string) => Promise<string> = getFileText,
+	alignmentCache: AlignmentCache = defaultAlignmentCache
 ): Promise<TextSource> {
 	const found = sources ?? (await getItemSources(client, itemId));
 
@@ -78,7 +92,7 @@ export async function loadTextSource(
 			index: null,
 			cues,
 			fromCache: false,
-			notice: null
+			notice: cues.length === 0 ? 'Subtitle file contained no cues.' : null
 		};
 	}
 
@@ -102,15 +116,27 @@ export async function loadTextSource(
 	}
 
 	const key = alignmentKey(itemId, found.epubSize, found.subSize);
-	const cached = await loadAlignment(key);
-	if (cached && cached.stats.coverage >= MIN_USABLE_COVERAGE) {
+	const cached = await alignmentCache.load(key);
+	if (cached) {
+		if (cached.stats.coverage >= MIN_USABLE_COVERAGE) {
+			return {
+				mode: 'epub',
+				doc,
+				index: cached,
+				cues,
+				fromCache: true,
+				notice: null
+			};
+		}
+		// A sub-threshold result is still this file pair's answer. Re-deriving
+		// it would mean running the whole alignment on every load.
 		return {
-			mode: 'epub',
-			doc,
-			index: cached,
+			mode: 'subtitle',
+			doc: null,
+			index: null,
 			cues,
-			fromCache: true,
-			notice: null
+			fromCache: false,
+			notice: unusableNotice(cached.stats.coverage)
 		};
 	}
 
@@ -127,19 +153,20 @@ export async function loadTextSource(
 
 	const index = alignEpubToCues(doc, cues);
 
+	// Save either way: the coverage decision is what the cache stores, and a
+	// fallback recomputed each load is exactly what the cache exists to avoid.
+	void alignmentCache.save(key, index);
+
 	if (index.stats.coverage < MIN_USABLE_COVERAGE) {
-		const pct = Math.round(index.stats.coverage * 100);
 		return {
 			mode: 'subtitle',
 			doc: null,
 			index: null,
 			cues,
 			fromCache: false,
-			notice: `EPUB matched only ${pct}% of the audio; it may be a different edition. Using subtitle text.`
+			notice: unusableNotice(index.stats.coverage)
 		};
 	}
-
-	void saveAlignment(key, index);
 
 	return { mode: 'epub', doc, index, cues, fromCache: false, notice: null };
 }

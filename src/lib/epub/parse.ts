@@ -1,5 +1,6 @@
 import type { EpubDoc, EpubChapter } from '$lib/types';
 import { EpubArchive, resolveRelative } from './zip';
+import { NON_PROSE_TAGS } from './text';
 
 const CONTAINER_PATH = 'META-INF/container.xml';
 
@@ -66,7 +67,10 @@ function buildTitleMap(
 				const href = a.getAttribute('href');
 				const label = a.textContent?.trim();
 				if (!href || !label) continue;
-				titles.set(resolveRelative(navPath, href), label);
+				// First wins, as in the NCX below. Landmarks follow the toc and
+				// point at the opening chapter; they are not its title.
+				const key = resolveRelative(navPath, href);
+				if (!titles.has(key)) titles.set(key, label);
 			}
 		}
 	}
@@ -174,7 +178,7 @@ export function parseEpub(buffer: ArrayBuffer): EpubDoc {
 
 /** Removes elements that carry no reading content. */
 function stripNonProse(root: Element): void {
-	for (const el of root.querySelectorAll('script, style, link, meta')) {
-		el.remove();
+	for (const el of Array.from(root.querySelectorAll('*'))) {
+		if (NON_PROSE_TAGS.has(el.tagName.toUpperCase())) el.remove();
 	}
 }

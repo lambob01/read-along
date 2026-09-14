@@ -76,7 +76,7 @@ function buildEpub(files: Record<string, string>): ArrayBuffer {
 	) as ArrayBuffer;
 }
 
-function standardEpub(opts: { nav?: boolean; ncx?: boolean } = {}) {
+function standardEpub(opts: { nav?: boolean; ncx?: boolean; navDoc?: string } = {}) {
 	const files: Record<string, string> = {
 		mimetype: 'application/epub+zip',
 		'META-INF/container.xml': CONTAINER,
@@ -84,7 +84,7 @@ function standardEpub(opts: { nav?: boolean; ncx?: boolean } = {}) {
 		'OEBPS/ch1.xhtml': chapter('<h1>見出し</h1><p>第一章の本文。</p>'),
 		'OEBPS/text/ch2.xhtml': chapter('<p>第二章の本文。</p>')
 	};
-	if (opts.nav) files['OEBPS/nav.xhtml'] = NAV;
+	if (opts.nav) files['OEBPS/nav.xhtml'] = opts.navDoc ?? NAV;
 	if (opts.ncx) files['OEBPS/toc.ncx'] = NCX;
 	return buildEpub(files);
 }
@@ -165,6 +165,34 @@ describe('parseEpub', () => {
 		expect(doc.chapters[0].title).toBe('序章');
 	});
 
+	it('keeps the toc title when a landmark points at the same file', () => {
+		// Landmarks usually come after the toc and point at the opening
+		// chapter; that entry must not replace the chapter's own title.
+		const navDoc = chapter(
+			`<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc"><ol>
+       <li><a href="ch1.xhtml">第一章</a></li>
+     </ol></nav>
+     <nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="landmarks"><ol>
+       <li><a epub:type="bodymatter" href="ch1.xhtml">本文開始</a></li>
+     </ol></nav>`
+		);
+		const doc = parseEpub(standardEpub({ nav: true, navDoc }));
+		expect(doc.chapters[0].title).toBe('第一章');
+	});
+
+	it('falls back to the HTML parser when strict XHTML fails', () => {
+		// The unclosed <p> makes this invalid XML but perfectly readable HTML.
+		const buf = buildEpub({
+			'META-INF/container.xml': CONTAINER,
+			'OEBPS/content.opf': opf(),
+			'OEBPS/ch1.xhtml': '<html><body><p>本文一。<p>本文二。</body></html>',
+			'OEBPS/text/ch2.xhtml': chapter('<p>二章。</p>')
+		});
+		const doc = parseEpub(buf);
+		expect(doc.chapters[0].body.textContent).toContain('本文一。');
+		expect(doc.chapters[0].body.textContent).toContain('本文二。');
+	});
+
 	it('strips scripts and stylesheets', () => {
 		const buf = buildEpub({
 			'META-INF/container.xml': CONTAINER,
@@ -177,6 +205,26 @@ describe('parseEpub', () => {
 		const doc = parseEpub(buf);
 		expect(doc.chapters[0].body.querySelector('script')).toBeNull();
 		expect(doc.chapters[0].body.querySelector('style')).toBeNull();
+	});
+
+	it('strips every element the renderer treats as non-prose', () => {
+		// Offsets are computed against this body, so anything the renderer
+		// clones out must already be gone here or the text streams diverge.
+		const buf = buildEpub({
+			'META-INF/container.xml': CONTAINER,
+			'OEBPS/content.opf': opf(),
+			'OEBPS/ch1.xhtml': chapter(
+				'<p>前 <svg><text>図</text></svg> <video src="v"></video> <audio src="a"></audio> <iframe src="i"></iframe> <object data="o"></object> <embed src="e"/><form><input/></form> 後</p>'
+			),
+			'OEBPS/text/ch2.xhtml': chapter('<p>二章。</p>')
+		});
+		const doc = parseEpub(buf);
+		const body = doc.chapters[0].body;
+		for (const tag of ['svg', 'video', 'audio', 'iframe', 'object', 'embed', 'form']) {
+			expect(body.querySelector(tag)).toBeNull();
+		}
+		expect(body.textContent).toContain('前');
+		expect(body.textContent).toContain('後');
 	});
 
 	it('recovers when container.xml is missing by probing for the OPF', () => {
