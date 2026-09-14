@@ -205,6 +205,71 @@ describe('alignEpubToCues', () => {
 		expect(byText('その次の文である').timed).toBe(true);
 	});
 
+	it('requires corroboration when a long sentence re-anchors its tail far ahead', () => {
+		// A sentence can match its opening locally, then re-anchor the rest of
+		// itself hundreds of cues ahead. Measuring the leap from its *first*
+		// matched character misses that: the opening position is close to the
+		// cursor, so the jump looks local while the sentence actually runs 0:00
+		// to 10:06 and strands every sentence whose cues it swallowed. Here the
+		// tail re-anchors into a stretch of filler, and the successor's words
+		// are beyond the continuity window from the landing point, so the jump
+		// must be rejected. The successor is still reachable, though: the
+		// rejected sentence's cursor is restored, and re-anchoring from there
+		// finds its cue.
+		const long = 'あ'.repeat(76) + 'い'.repeat(44);
+		const successor = '次の文である';
+		const cues = makeCues([
+			['あ'.repeat(76), 0, 1],
+			['x'.repeat(440), 1, 10],
+			['い'.repeat(44) + 'z'.repeat(400), 10, 11],
+			[successor, 12, 14]
+		]);
+		const doc = makeDoc(`<p>${long}</p><p>${successor}</p>`);
+
+		const out = alignEpubToCues(doc, cues);
+
+		expect(out.sentences[0].timed).toBe(false);
+		expect(out.timed).toHaveLength(1);
+		// The following sentence must still be reachable: the rejected jump must
+		// not leave the cursor wherever it stopped looking.
+		expect(out.sentences[1].timed).toBe(true);
+		expect(out.sentences[1].start).toBe(12);
+	});
+
+	it('does not count cues for sentences finalize demotes', () => {
+		// A zero-width cue gives the first sentence a degenerate range that
+		// finalize drops. matchedCues must reflect only the survivor, or the
+		// cue-match percentage shown in the reader is inflated.
+		const doc = makeDoc('<p>一。二。</p>');
+		const cues = makeCues([
+			['一。', 0, 0],
+			['二。', 0, 2]
+		]);
+
+		const out = alignEpubToCues(doc, cues);
+
+		expect(out.sentences[0].timed).toBe(false);
+		expect(out.sentences[1].timed).toBe(true);
+		expect(out.stats.matchedCues).toBe(1);
+	});
+
+	it('still times a long jump near the end of the book with nothing left to corroborate (documented behaviour)', () => {
+		// The escape hatch in isCorroborated: with no following sentences to ask,
+		// a long jump is accepted. Deliberate, since the end of the book cannot
+		// corroborate itself. This test pins it so a future change has to mean to.
+		// The sentence sits at cue offset 600 of 720, so its start interpolates
+		// to 83.33s — evidence the whole span was believed, not that the cursor
+		// landed on the cue's start by accident.
+		const long = 'あ'.repeat(120);
+		const cues = makeCues([['x'.repeat(600) + long, 0, 100]]);
+		const doc = makeDoc(`<p>${long}</p>`);
+
+		const out = alignEpubToCues(doc, cues);
+
+		expect(out.sentences[0].timed).toBe(true);
+		expect(out.sentences[0].start).toBeCloseTo(83.33, 1);
+	});
+
 	it('rewinds the cursor when a sentence fails to match', () => {
 		// This sentence anchors on a phrase that recurs late in the book, matches
 		// a third of itself there and is rightly left untimed — but the cursor it

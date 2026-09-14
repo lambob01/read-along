@@ -215,6 +215,23 @@ function isCorroborated(
 	return consulted === 0;
 }
 
+/**
+ * Index of the first span whose end lies past `offset`. Spans are sorted and
+ * contiguous, so that span — and every one after it — is where a sentence
+ * starting at `offset` begins. Binary search rather than a full scan because
+ * the count runs for every timed sentence and real books have thousands.
+ */
+function firstSpanCovering(spans: CueSpan[], offset: number): number {
+	let lo = 0;
+	let hi = spans.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (spans[mid].end > offset) hi = mid;
+		else lo = mid + 1;
+	}
+	return lo;
+}
+
 /** Maps a normalized subtitle offset to a time by interpolating within its cue. */
 function timeAt(spans: CueSpan[], offset: number, edge: 'start' | 'end'): number | null {
 	// spans are sorted and contiguous; binary search for the covering span.
@@ -273,7 +290,9 @@ export function alignEpubToCues(
 	const sentences: AlignedSentence[] = [];
 	let streamCursor = 0;
 	let cueCursor = 0;
-	const matchedCueIdx = new Set<number>();
+	// Cue span range each timed sentence claims, indexed by sentence id, so the
+	// cue count can be taken from the survivors *after* finalize demotes.
+	const cueRanges = new Map<number, { first: number; last: number }>();
 
 	for (let i = 0; i < sourceSentences.length; i++) {
 		const src = sourceSentences[i];
@@ -309,8 +328,11 @@ export function alignEpubToCues(
 		let timed = ratio >= minSentenceMatch && firstCueOffset !== -1;
 
 		// A match that had to leap a long way is only believed if the text after
-		// it carries on from where it landed.
-		if (timed && firstCueOffset - cursorBefore > LONG_JUMP) {
+		// it carries on from where it landed. The leap is measured from where the
+		// sentence's cues began to where they ended: a sentence can match its
+		// opening locally and then re-anchor its tail hundreds of cues ahead, and
+		// measuring from the first matched character misses exactly that case.
+		if (timed && lastCueOffset - cursorBefore > LONG_JUMP) {
 			timed = isCorroborated(cueChars, lastCueOffset + 1, sourceSentences, i + 1);
 		}
 
@@ -325,25 +347,23 @@ export function alignEpubToCues(
 		let start = 0;
 		let end = 0;
 		if (timed) {
-			const s = timeAt(spans, firstCueOffset, 'start');
-			const e = timeAt(spans, lastCueOffset, 'end');
-			if (s === null || e === null) {
-				sentences.push(makeSentence(i, src, streamStart, streamCursor, 0, 0, false));
-				continue;
-			}
-			start = s;
-			end = e;
-			for (let k = 0; k < spans.length; k++) {
-				if (spans[k].end > firstCueOffset && spans[k].start <= lastCueOffset) {
-					matchedCueIdx.add(k);
-				}
+			// Spans tile the stream, so an in-range sentence offset always
+			// resolves to a time.
+			start = timeAt(spans, firstCueOffset, 'start')!;
+			end = timeAt(spans, lastCueOffset, 'end')!;
+			if (end <= start) {
+				// A degenerate range cannot be timed: finalize demotes it, so
+				// record no cue range for it.
+				timed = false;
+			} else {
+				cueRanges.set(i, { first: firstCueOffset, last: lastCueOffset });
 			}
 		}
 
 		sentences.push(makeSentence(i, src, streamStart, streamCursor, start, end, timed));
 	}
 
-	return finalize(blocks, sentences, cues.length, matchedCueIdx.size);
+	return finalize(blocks, sentences, cues.length, cueRanges, spans);
 }
 
 function makeSentence(
@@ -383,7 +403,8 @@ function finalize(
 	blocks: EpubBlock[],
 	sentences: AlignedSentence[],
 	cueCount: number,
-	matchedCues: number
+	cueRanges: Map<number, { first: number; last: number }>,
+	spans: CueSpan[]
 ): AlignedIndex {
 	const candidates = sentences
 		.filter((s) => s.timed)
@@ -408,6 +429,19 @@ function finalize(
 		}
 		timed.push(s);
 		prevEnd = s.end;
+	}
+
+	// Count the cue spans the surviving sentences cover. Counting each timed
+	// sentence's range as it was assigned would include ranges finalize just
+	// demoted, inflating the cue-match percentage shown in the reader.
+	const covered = new Set<number>();
+	for (const s of timed) {
+		const range = cueRanges.get(s.id);
+		if (!range) continue;
+		for (let k = firstSpanCovering(spans, range.first); k < spans.length; k++) {
+			if (spans[k].start > range.last) break;
+			covered.add(k);
+		}
 	}
 
 	const starts = new Float64Array(timed.length);
@@ -440,7 +474,7 @@ function finalize(
 		timedSentences: timed.length,
 		coverage: sentences.length > 0 ? timed.length / sentences.length : 0,
 		cueCount,
-		matchedCues
+		matchedCues: covered.size
 	};
 
 	return { blocks, sentences, timed, starts, ends, stats };

@@ -25,8 +25,11 @@ interface CachedAlignment {
  *    and a sentence's tail is no longer hunted across the whole book.
  * 3: a long jump must be corroborated by the text that follows it, so a table
  *    of contents can no longer drag the cursor past a whole chapter.
+ * 4: the leap is measured to where a sentence's cues ended, not to where its
+ *    first character matched, so a locally matched opening followed by a far
+ *    re-anchor is corroborated too.
  */
-const ALGORITHM_VERSION = 3;
+const ALGORITHM_VERSION = 4;
 
 /**
  * Cache key incorporating both source file sizes: replacing either the EPUB or
