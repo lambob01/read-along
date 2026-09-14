@@ -5,6 +5,7 @@
 	import { recent, type RecentBook } from '$lib/stores/recent';
 	import { ABSClient } from '$lib/abs/client';
 	import { getLibraries, getLibraryItems } from '$lib/abs/api';
+	import { createLatestRequests } from '$lib/abs/latest';
 	import type { ABSLibrary, ABSItem } from '$lib/types';
 
 	let libraries: ABSLibrary[] = $state([]);
@@ -15,10 +16,29 @@
 	let searchQuery = $state('');
 
 	let connectionToken = '';
+	let disposed = false;
+	/** Latest-response-wins, so a slow earlier library cannot clobber a later one. */
+	const itemsRequest = createLatestRequests();
 
 	const unsubConnection = connection.subscribe((s) => {
 		connectionToken = s.token;
 	});
+
+	async function loadItems(client: ABSClient, id: string) {
+		loading = true;
+		error = '';
+		await itemsRequest.run(
+			() => getLibraryItems(client, id),
+			(result) => {
+				items = result;
+				loading = false;
+			},
+			(err) => {
+				error = err instanceof Error ? err.message : 'Failed to load';
+				loading = false;
+			}
+		);
+	}
 
 	onMount(async () => {
 		if (!connectionToken) {
@@ -26,33 +46,28 @@
 			return;
 		}
 
+		const client = new ABSClient('/abs', connectionToken);
 		try {
-			const client = new ABSClient('/abs', connectionToken);
 			const libs = await getLibraries(client);
+			if (disposed) return;
 			libraries = libs;
 
 			if (libs.length > 0) {
 				selectedLibraryId = libs[0].id;
-				items = await getLibraryItems(client, libs[0].id);
+				await loadItems(client, libs[0].id);
+			} else {
+				loading = false;
 			}
 		} catch (err) {
+			if (disposed) return;
 			error = err instanceof Error ? err.message : 'Failed to load';
-		} finally {
 			loading = false;
 		}
 	});
 
-	async function selectLibrary(id: string) {
+	function selectLibrary(id: string) {
 		selectedLibraryId = id;
-		loading = true;
-		try {
-			const client = new ABSClient('/abs', connectionToken);
-			items = await getLibraryItems(client, id);
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to load';
-		} finally {
-			loading = false;
-		}
+		void loadItems(new ABSClient('/abs', connectionToken), id);
 	}
 
 	/** Books open to their details page; playback starts from there. */
@@ -95,7 +110,11 @@
 		});
 	});
 
-	onDestroy(unsubConnection);
+	onDestroy(() => {
+		disposed = true;
+		itemsRequest.cancel();
+		unsubConnection();
+	});
 </script>
 
 <div class="min-h-screen bg-[var(--bg)]">
@@ -221,6 +240,7 @@
 										alt=""
 										class="h-full w-full object-cover"
 										loading="lazy"
+										referrerpolicy="no-referrer"
 									/>
 									<div
 										class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
@@ -276,6 +296,7 @@
 									alt=""
 									class="h-full w-full object-cover"
 									loading="lazy"
+									referrerpolicy="no-referrer"
 								/>
 								<div
 									class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"

@@ -69,4 +69,28 @@ describe('SettingsPanel', () => {
 
 		expect(get(settings).readAlong).toBe(true);
 	});
+
+	it('lists only the shortcuts that are live, and documents the vim keys', async () => {
+		const { default: SettingsPanel } = await import('./SettingsPanel.svelte');
+		const { mount, flushSync } = await import('svelte');
+		const { settings } = await import('$lib/stores/settings');
+
+		settings.update((s) => ({ ...s, readAlong: false, ankiEnabled: false }));
+		const host = document.createElement('div');
+		mount(SettingsPanel, { target: host, props: { showSubtitleOptions: true, only: 'reading' } });
+		flushSync();
+
+		const offline = host.textContent ?? '';
+		expect(offline).toContain('J / L');
+		expect(offline).toContain('Show or hide the controls');
+		expect(offline).not.toContain('Mine to Anki');
+		expect(offline).not.toContain('Scroll back to the narration');
+
+		settings.update((s) => ({ ...s, readAlong: true, ankiEnabled: true }));
+		flushSync();
+
+		const online = host.textContent ?? '';
+		expect(online).toContain('Mine to Anki');
+		expect(online).toContain('Scroll back to the narration');
+	});
 });

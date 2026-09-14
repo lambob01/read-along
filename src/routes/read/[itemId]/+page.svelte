@@ -31,6 +31,7 @@
 	import { parseStartParam } from '$lib/reader/startParam';
 	import { createHighlighter, type HighlightHandle } from '$lib/reader/highlight';
 	import { narrationDirection, type NarrationDirection } from '$lib/reader/narrationDirection';
+	import { isActivatable, trapTab } from '$lib/reader/a11y';
 	import { primeCapture, releaseCapture } from '$lib/anki/capture';
 	import { mineSentence } from '$lib/anki/mine';
 
@@ -256,13 +257,16 @@
 			// Only on success: a failed mine has interrupted the user enough.
 			applyMinePause(target);
 		} catch (err) {
+			if (disposed) return;
 			// Logged as well as shown: the toast has to stay short, and the
 			// stack is what identifies which step gave up.
 			console.error('[readalong] mine failed', err);
 			showToast('err', err instanceof Error ? err.message : 'Mining failed');
 		} finally {
-			mining = false;
-			mineProgress = 0;
+			if (!disposed) {
+				mining = false;
+				mineProgress = 0;
+			}
 		}
 	}
 
@@ -499,9 +503,13 @@
 	}
 
 	/** Tapping the page toggles chrome, matching ttu's reader. */
-	function handleReaderTap(e: MouseEvent) {
+	function handleReaderTap() {
 		// A tap that lands on a text selection is the user reading, not toggling.
 		if (window.getSelection()?.toString()) return;
+		toggleChrome();
+	}
+
+	function toggleChrome() {
 		if (chromeVisible) {
 			chromeVisible = false;
 			if (chromeTimer) clearTimeout(chromeTimer);
@@ -510,18 +518,52 @@
 		}
 	}
 
+	/** Every popover and the settings sheet; Escape dismisses whichever is open. */
+	function closePopovers() {
+		showSettings = false;
+		showChapterDropdown = false;
+		showVolumeSlider = false;
+		showOffsetPanel = false;
+		showToc = false;
+		showSyncPanel = false;
+	}
+
 	/**
 	 * Links inside the book point at files of the EPUB, not at pages of this
-	 * app. Fragment links scroll within the page and are left alone; anything
-	 * else would route to the reader with a chapter filename as the item id.
+	 * app. Only in-page fragments are let through; anything else — a chapter
+	 * filename, a `javascript:` URL — would route the reader with that string
+	 * as the item id and kill the page. Fragments have nowhere to scroll to
+	 * either, because the renderer drops the `id`s they name.
 	 */
 	function handleContentLinkClick(e: MouseEvent) {
 		const el = e.target as HTMLElement | null;
 		const a = el?.closest?.('a');
 		if (!a) return;
 		const href = a.getAttribute('href');
-		if (href && !href.startsWith('#')) e.preventDefault();
+		if (href && href.startsWith('#')) return;
+		e.preventDefault();
 	}
+
+	/**
+	 * The scroller only exists once the loading gate opens, so it cannot be
+	 * wired in `onMount` — `scrollerEl` is not even bound at that point, and
+	 * the listeners landed on nothing. Keying the effect on the element
+	 * attaches them when it appears and detaches them with it. Tapping to
+	 * toggle the chrome lives here too, rather than as a markup `onclick` on a
+	 * static element with no keyboard equivalent of its own.
+	 */
+	$effect(() => {
+		const el = scrollerEl;
+		if (!el) return;
+		el.addEventListener('click', handleReaderTap);
+		el.addEventListener('click', handleContentLinkClick);
+		el.addEventListener('scroll', handleNarrationScroll, { passive: true });
+		return () => {
+			el.removeEventListener('click', handleReaderTap);
+			el.removeEventListener('click', handleContentLinkClick);
+			el.removeEventListener('scroll', handleNarrationScroll);
+		};
+	});
 
 	onMount(async () => {
 		if (!connectionToken) {
@@ -534,11 +576,6 @@
 		highlighter = createHighlighter({ getRoot: () => contentEl ?? document });
 
 		window.addEventListener('keydown', handleKeyDown);
-		// The book's own links point at files inside the EPUB, not at pages of
-		// this app; without this, clicking one (a table of contents, a footnote)
-		// routes here with a chapter filename as the item id and the page dies.
-		scrollerEl?.addEventListener('click', handleContentLinkClick);
-		scrollerEl?.addEventListener('scroll', handleNarrationScroll, { passive: true });
 
 		const restart = $page.url.searchParams.get('restart') === '1';
 		const startParam = parseStartParam($page.url.searchParams.get('at'));
@@ -548,7 +585,6 @@
 			const item = await getItem(client, itemId);
 			if (disposed) return;
 			reader.setItem(item);
-			reader.setLoading(true);
 
 			const session = await getStreamSession(client, itemId);
 			if (disposed) return;
@@ -600,6 +636,7 @@
 				source = await loadTextSource(client, itemId);
 				if (disposed) return;
 			} catch (err) {
+				if (disposed) return;
 				source = null;
 				sourceNotice = err instanceof Error ? err.message : 'No transcript';
 			}
@@ -656,12 +693,11 @@
 					attachSync(cueIndex, (id) => sentenceMap.get(id));
 				});
 			}
-
-			reader.setLoading(false);
 		} catch (err) {
+			if (disposed) return;
 			errorState = err instanceof Error ? err.message : 'Failed to load item';
 		} finally {
-			loading = false;
+			if (!disposed) loading = false;
 		}
 	});
 
@@ -670,6 +706,11 @@
 		timingIndex: Parameters<typeof createSyncController>[1],
 		elementFor: (id: number) => HTMLElement | undefined
 	) {
+		// Without a track there is nothing to follow: building the controllers
+		// anyway would light sentence 0, auto-scroll the text, and render a
+		// transport that cannot play.
+		if (noAudioNotice) return;
+
 		// The renderer was just built; the effect that keeps this in step has
 		// already run against a null handle, so push the current state in.
 		epubRender?.setFollowNarration($settings.readAlong && !detached);
@@ -860,16 +901,22 @@
 		// singleton audio element, and createMediaElementSource cannot be
 		// re-run on an element that already has one.
 		window.removeEventListener('keydown', handleKeyDown);
-		scrollerEl?.removeEventListener('click', handleContentLinkClick);
-		scrollerEl?.removeEventListener('scroll', handleNarrationScroll);
+		if (chromeScrollAnim !== null) {
+			cancelAnimationFrame(chromeScrollAnim);
+			chromeScrollAnim = null;
+		}
 		// The audio element is a singleton that outlives this page, so the
-		// controllers' listeners have to come off with it.
+		// controllers' listeners have to come off with it, and the references
+		// must not survive to be poked by a later effect.
 		player.getAudioElement()?.removeEventListener('seeked', handleAudioSeeked);
 		syncController?.destroy();
+		syncController = null;
 		repeatController?.destroy();
 		repeatController = null;
 		autoScroller?.destroy();
+		autoScroller = null;
 		highlighter?.reset();
+		highlighter = null;
 		epubRender?.destroy();
 		epubRender = null;
 		// The capture element holds this book's audio index; a different book
@@ -1184,6 +1231,10 @@
 
 	function jumpToEpubChapter(order: number) {
 		showToc = false;
+		// Tell the autoscroller this move is the reader's, before the scroll
+		// lands, so it detaches instead of dragging the page back to the
+		// narration once the suspend window lapses.
+		autoScroller?.markReaderDriven();
 		epubRender?.scrollToChapter(order);
 		// Jumping to a chapter is the clearest possible statement that the
 		// reader is not following the narration right now.
@@ -1247,12 +1298,25 @@
 			el instanceof HTMLTextAreaElement
 		)
 			return;
-		// A focused button activates itself on Space and Enter, so only those two
-		// are ceded to it. Every other shortcut keeps working rather than going
-		// dead on whichever control happened to be clicked last.
-		if (el instanceof HTMLButtonElement && (e.key === ' ' || e.key === 'Enter')) return;
+		// A focused control activates itself on Space and Enter, so those two
+		// are ceded to anything activatable — not just buttons. Every other
+		// shortcut keeps working rather than going dead on whichever control
+		// happened to be clicked last.
+		if ((e.key === ' ' || e.key === 'Enter') && isActivatable(el)) return;
 		// Browser and OS shortcuts keep their meaning; only Alt is ours.
 		if (e.metaKey || e.ctrlKey) return;
+
+		// Escape dismisses whatever is open before any playback key sees it.
+		if (e.key === 'Escape') {
+			closePopovers();
+			return;
+		}
+
+		// The keyboard equivalent of tapping the page.
+		if (e.key === 'c') {
+			toggleChrome();
+			return;
+		}
 
 		// Read-along off: the transport shortcuts have nothing to act on, and
 		// the keys go back to meaning what they mean in any other book reader.
@@ -1429,6 +1493,7 @@
 							{#if showToc}
 								<button
 									class="fixed inset-0 z-40 cursor-default"
+									tabindex="-1"
 									onclick={() => (showToc = false)}
 									aria-label="Close contents"
 								></button>
@@ -1518,6 +1583,7 @@
 							{#if showSyncPanel}
 								<button
 									class="fixed inset-0 z-40 cursor-default"
+									tabindex="-1"
 									onclick={() => (showSyncPanel = false)}
 									aria-label="Close sync report"
 								></button>
@@ -1595,6 +1661,7 @@
 							{#if showOffsetPanel}
 								<button
 									class="fixed inset-0 z-40 cursor-default"
+									tabindex="-1"
 									onclick={() => (showOffsetPanel = false)}
 									aria-label="Close sync offset"
 								></button>
@@ -1707,7 +1774,7 @@
 		     cycles through the modes enabled in settings. When the chrome hides
 		     the top bar's space collapses beneath it, so the strip rises to the
 		     top and the reader text sits right below it. -->
-		{#if readAlong}
+		{#if readAlong && !noAudioNotice}
 			<div class="relative z-20 border-b border-[var(--border)] bg-[var(--bg)]/90">
 				<div class="relative h-1.5 w-full bg-[var(--border)]">
 					<div
@@ -1742,8 +1809,6 @@
 		     chrome does not reflow the text and lose the reading position. -->
 		<div
 			bind:this={scrollerEl}
-			onclick={handleReaderTap}
-			role="presentation"
 			data-vertical={$settings.verticalText}
 			data-readalong={readAlong}
 			class="reader-scroller reader-pane flex-1"
@@ -1795,7 +1860,7 @@
 		     through the modes enabled in settings. When the chrome is up it
 		     floats just above the player bar; immersive mode parks it at the
 		     edge. -->
-		{#if readAlong}
+		{#if readAlong && !noAudioNotice}
 			<button
 				onclick={cycleProgressMode}
 				disabled={availableModes.length < 2}
@@ -1810,7 +1875,7 @@
 		{/if}
 
 		<!-- Player bar -->
-		{#if readAlong}
+		{#if readAlong && !noAudioNotice}
 			<div
 				class="absolute inset-x-0 bottom-0 z-30 border-t border-[var(--border)] bg-[var(--surface)] px-2 py-2 transition-transform duration-200 sm:px-3 {chromeVisible
 					? 'translate-y-0'
@@ -1942,6 +2007,7 @@
 								{#if showVolumeSlider}
 									<button
 										class="fixed inset-0 z-40 cursor-default"
+										tabindex="-1"
 										onclick={() => (showVolumeSlider = false)}
 										aria-label="Close volume"
 									></button>
@@ -2012,6 +2078,7 @@
 									{#if showChapterDropdown}
 										<button
 											class="fixed inset-0 z-40 cursor-default"
+											tabindex="-1"
 											onclick={() => (showChapterDropdown = false)}
 											aria-label="Close chapter list"
 										></button>
@@ -2233,10 +2300,12 @@
 				tabindex="-1"
 				onkeydown={(e) => {
 					if (e.key === 'Escape') showSettings = false;
+					else trapTab(e, e.currentTarget);
 				}}
 			>
 				<button
 					class="absolute inset-0 bg-black/30"
+					tabindex="-1"
 					onclick={() => (showSettings = false)}
 					aria-label="Close settings"
 				></button>

@@ -150,23 +150,36 @@
 		{ keys: 'Shift + R', what: 'Toggle repeat mode' },
 		{ keys: 'N / P', what: 'Next / previous chapter' },
 		{ keys: '[ ]', what: 'Nudge the sync offset' },
-		{ keys: 'A', what: 'Mine to Anki' },
-		{ keys: 'F', what: 'Scroll back to the narration' },
+		{ keys: 'J / L', what: 'Seek back / forward' },
+		{ keys: 'H', what: 'Skip back 5 seconds' },
+		{ keys: 'C', what: 'Show or hide the controls' },
 		{ keys: 'Shift + A', what: 'Read-along on or off' }
 	];
 
-	/** The arrow-key rows swap when line-stepping is the unmodified behaviour. */
-	const shownShortcuts = $derived(
-		$settings.arrowKeys === 'time'
-			? shortcuts
-			: shortcuts.map((s) =>
-					s.keys === '← →'
-						? { keys: '← →', what: 'Previous / next line' }
-						: s.keys === 'Alt + ← →'
-							? { keys: 'Alt + ← →', what: 'Seek by time' }
-							: s
-				)
-	);
+	/**
+	 * The arrow-key rows swap when line-stepping is the unmodified behaviour,
+	 * and the two conditional rows only appear while their key does something:
+	 * `a` is ignored without mining, and `f` has no narration to return to
+	 * when read-along is off.
+	 */
+	const shownShortcuts = $derived.by(() => {
+		const rows =
+			$settings.arrowKeys === 'time'
+				? shortcuts
+				: shortcuts.map((s) =>
+						s.keys === '← →'
+							? { keys: '← →', what: 'Previous / next line' }
+							: s.keys === 'Alt + ← →'
+								? { keys: 'Alt + ← →', what: 'Seek by time' }
+								: s
+					);
+		const extra: { keys: string; what: string }[] = [];
+		if ($settings.ankiEnabled) extra.push({ keys: 'A', what: 'Mine to Anki' });
+		if ($settings.readAlong) extra.push({ keys: 'F', what: 'Scroll back to the narration' });
+		// Before the read-along toggle, which is a way of reading rather than a
+		// transport key.
+		return [...rows.slice(0, -1), ...extra, rows[rows.length - 1]];
+	});
 
 	const hlStyles: { value: HighlightStyle; label: string }[] = [
 		{ value: 'background', label: 'Fill' },

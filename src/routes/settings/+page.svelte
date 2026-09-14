@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
+	import { goBackOrHome } from '$lib/navigation/back';
 	import { settings } from '$lib/stores/settings';
 </script>
 
@@ -10,7 +11,7 @@
 	>
 		<div class="mx-auto flex max-w-2xl items-center gap-2">
 			<button
-				onclick={() => history.back()}
+				onclick={() => goBackOrHome(goto, history)}
 				class="rounded-lg p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)]"
 				aria-label="Back"
 			>

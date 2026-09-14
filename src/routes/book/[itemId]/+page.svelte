@@ -25,6 +25,7 @@
 	let showAllChapters = $state(false);
 
 	let connectionToken = '';
+	let disposed = false;
 	const unsubConnection = connection.subscribe((s) => {
 		connectionToken = s.token;
 	});
@@ -37,12 +38,14 @@
 		try {
 			const client = new ABSClient('/abs', connectionToken);
 			const item = await getItem(client, itemId);
+			if (disposed) return;
 			details = toBookDetails(item);
 			chapters = item?.media?.chapters ?? [];
 		} catch (err) {
+			if (disposed) return;
 			error = err instanceof Error ? err.message : 'Failed to load book';
 		} finally {
-			loading = false;
+			if (!disposed) loading = false;
 		}
 	});
 
@@ -76,7 +79,10 @@
 		goto(`/read/${itemId}${fromStart ? '?restart=1' : ''}`);
 	}
 
-	onDestroy(unsubConnection);
+	onDestroy(() => {
+		disposed = true;
+		unsubConnection();
+	});
 </script>
 
 <div class="min-h-screen bg-[var(--bg)]">
@@ -110,7 +116,12 @@
 					<div
 						class="aspect-square overflow-hidden rounded-xl bg-[var(--surface)] shadow-[var(--shadow-lg)]"
 					>
-						<img src={coverUrl} alt="" class="h-full w-full object-cover" />
+						<img
+							src={coverUrl}
+							alt=""
+							class="h-full w-full object-cover"
+							referrerpolicy="no-referrer"
+						/>
 					</div>
 				</div>
 
