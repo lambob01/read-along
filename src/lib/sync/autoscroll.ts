@@ -90,6 +90,14 @@ export function createAutoScroller(
 	let suspendTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Last sentence asked for, i.e. where the narration is on the page. */
 	let activeId: number | null = null;
+	/** A scroll dropped because the scroller was suspended; applied on resume. */
+	let pendingId: number | null = null;
+	/**
+	 * Whether the suspension came from a gesture on the scroller. A scroll
+	 * event on its own does not mean the reader went anywhere: it can be a
+	 * browser adjustment or the tail of this scroller's own animation.
+	 */
+	let readerDriven = false;
 	let settleTimer: ReturnType<typeof setTimeout> | null = null;
 	let selfScrollUntil = 0;
 
@@ -99,6 +107,7 @@ export function createAutoScroller(
 
 	function handleInteraction() {
 		// A gesture during a scroll of our own is still the reader taking over.
+		readerDriven = true;
 		selfScrollUntil = 0;
 		suspend();
 		scheduleSettleCheck();
@@ -125,7 +134,19 @@ export function createAutoScroller(
 			const el = getSentenceEl(activeId);
 			// No element means its chapter is no longer even mounted, which is
 			// as far away as it is possible to get.
-			if (!el || isOffScreen(el)) hooks.onDetach?.();
+			if (!el || isOffScreen(el)) {
+				if (!readerDriven) {
+					// Not the reader leaving: a correction of ours went missing
+					// (dropped while suspended) or something beyond this scroller
+					// moved the page. Finish the job instead of surrendering.
+					const id = pendingId ?? activeId;
+					pendingId = null;
+					scrollNow(id);
+					return;
+				}
+				pendingId = null;
+				hooks.onDetach?.();
+			}
 		}, SETTLE_MS);
 	}
 
@@ -134,11 +155,20 @@ export function createAutoScroller(
 		if (suspendTimer) clearTimeout(suspendTimer);
 		suspendTimer = setTimeout(() => {
 			suspended = false;
+			suspendTimer = null;
+			// A gesture is only "recent" while the suspension it started lasts.
+			readerDriven = false;
+			if (pendingId !== null) {
+				const id = pendingId;
+				pendingId = null;
+				if (activeId === id) scrollNow(id);
+			}
 		}, 3000);
 	}
 
 	function resume() {
 		suspended = false;
+		readerDriven = false;
 		if (suspendTimer) {
 			clearTimeout(suspendTimer);
 			suspendTimer = null;
@@ -188,9 +218,14 @@ export function createAutoScroller(
 		if (Math.abs(delta) < 1) return;
 		const far = Math.abs(delta) > view.size * INSTANT_JUMP_VIEWPORTS;
 		selfScrollUntil = now() + SELF_SCROLL_MS;
-		container.scrollBy({
-			top: options.vertical ? 0 : delta,
-			left: options.vertical ? -delta : 0,
+		// An absolute destination, not a relative scrollBy. The same correction
+		// is issued again whenever the observer still reads the sentence as off
+		// screen — a programmatic scroll the engine has not committed yet looks
+		// exactly like that — and a relative delta applied twice travels twice
+		// as far. Repeating an absolute destination is harmless.
+		container.scrollTo({
+			top: options.vertical ? container.scrollTop : container.scrollTop + delta,
+			left: options.vertical ? container.scrollLeft - delta : container.scrollLeft,
 			behavior: options.smooth && !far ? 'smooth' : 'auto'
 		});
 	}
@@ -210,6 +245,24 @@ export function createAutoScroller(
 		return r.far < view.near || r.near > view.far;
 	}
 
+	/**
+	 * The scroll itself, without the suspension check: watch the sentence so
+	 * reflow cannot move it out of view unnoticed, and bring it back to the
+	 * anchor if it has drifted past the dead zone.
+	 */
+	function scrollNow(id: number) {
+		const el = getSentenceEl(id);
+		if (!el) return;
+
+		if (observedEl !== el) {
+			if (observedEl) observer.unobserve(observedEl);
+			observer.observe(el);
+			observedEl = el;
+		}
+
+		if (isOutsideDeadZone(el)) scrollElementToAnchor(el);
+	}
+
 	// Catches the case where reflow (a chapter mounting ahead of the active one)
 	// moves it out of view without the active id changing.
 	let observedEl: HTMLElement | null = null;
@@ -220,6 +273,11 @@ export function createAutoScroller(
 			(entries) => {
 				if (suspended) return;
 				for (const entry of entries) {
+					// A queued entry can arrive for an element this scroller has
+					// already stopped observing — the line *before* the current
+					// one. Acting on it drags the page back to where the
+					// narration used to be, undoing the scroll to the new line.
+					if (entry.target !== observedEl) continue;
 					if (!entry.isIntersecting) {
 						scrollElementToAnchor(entry.target as HTMLElement);
 					}
@@ -242,17 +300,15 @@ export function createAutoScroller(
 	return {
 		scrollTo(id: number) {
 			activeId = id;
-			if (suspended) return;
-			const el = getSentenceEl(id);
-			if (!el) return;
-
-			if (observedEl !== el) {
-				if (observedEl) observer.unobserve(observedEl);
-				observer.observe(el);
-				observedEl = el;
+			if (suspended) {
+				// Queued, not dropped: the line must still be reached once the
+				// suspension lifts, or the settle check reads it as the reader
+				// having gone elsewhere.
+				pendingId = id;
+				return;
 			}
-
-			if (isOutsideDeadZone(el)) scrollElementToAnchor(el);
+			pendingId = null;
+			scrollNow(id);
 		},
 		suspend,
 		resume,

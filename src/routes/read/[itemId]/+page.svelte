@@ -373,6 +373,17 @@
 	});
 
 	/**
+	 * While the narration drives the page, the mounted window belongs to it:
+	 * re-windowing on viewport drift mounts chapters whose real extent differs
+	 * from its estimate and shifts the narrated line. Detaching hands the
+	 * window back to the viewport.
+	 */
+	$effect(() => {
+		const on = readAlong && !detached;
+		epubRender?.setFollowNarration(on);
+	});
+
+	/**
 	 * Read-along on or off. Guarded on the value actually changing, because the
 	 * effect re-runs on every settings change and pausing the book each time
 	 * someone drags the font-size slider would be its own bug.
@@ -521,6 +532,7 @@
 		// Scoping the sweep to the rendered text keeps it off the rest of the page;
 		// contentEl is not bound yet, so it is resolved lazily on each call.
 		highlighter = createHighlighter({ getRoot: () => contentEl ?? document });
+
 		window.addEventListener('keydown', handleKeyDown);
 		// The book's own links point at files inside the EPUB, not at pages of
 		// this app; without this, clicking one (a table of contents, a footnote)
@@ -658,6 +670,9 @@
 		timingIndex: Parameters<typeof createSyncController>[1],
 		elementFor: (id: number) => HTMLElement | undefined
 	) {
+		// The renderer was just built; the effect that keeps this in step has
+		// already run against a null handle, so push the current state in.
+		epubRender?.setFollowNarration($settings.readAlong && !detached);
 		const audioEl = player.getAudioElement();
 		if (audioEl) {
 			syncController = createSyncController(
@@ -700,7 +715,9 @@
 					smooth: $settings.smoothScroll,
 					vertical: $settings.verticalText
 				},
-				{ onDetach: () => (detached = true) }
+				{
+					onDetach: () => (detached = true)
+				}
 			);
 		}
 

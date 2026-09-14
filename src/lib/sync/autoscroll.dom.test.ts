@@ -24,13 +24,41 @@ function rect(box: { x: number; y: number; w: number; h: number }): DOMRect {
 }
 
 let scrolls: { top: number; left: number }[] = [];
+/** Targets the scroller is currently observing, and the observer's callback. */
+let observed: Set<Element>;
+let ioCallback: ((entries: IntersectionObserverEntry[]) => void) | null;
 
 function makeContainer(): HTMLElement {
 	const el = document.createElement('div');
 	el.getBoundingClientRect = () => rect({ x: 0, y: 0, w: VIEW.width, h: VIEW.height });
-	el.scrollBy = ((opts: ScrollToOptions) => {
-		scrolls.push({ top: opts.top ?? 0, left: opts.left ?? 0 });
-	}) as HTMLElement['scrollBy'];
+	let top = 0;
+	let left = 0;
+	Object.defineProperty(el, 'scrollTop', {
+		configurable: true,
+		get: () => top,
+		set: (value: number) => {
+			top = value;
+		}
+	});
+	Object.defineProperty(el, 'scrollLeft', {
+		configurable: true,
+		get: () => left,
+		set: (value: number) => {
+			left = value;
+		}
+	});
+	// Absolute, as the scroller uses it: the recorded target is the position
+	// the page should occupy, not the distance to travel. Applying it here
+	// makes retries observable as "no extra movement".
+	el.scrollTo = ((options: ScrollToOptions | number, y?: number) => {
+		const opts: ScrollToOptions =
+			typeof options === 'object' && options !== null ? options : { top: options, left: y };
+		const targetTop = typeof opts.top === 'number' ? opts.top : top;
+		const targetLeft = typeof opts.left === 'number' ? opts.left : left;
+		scrolls.push({ top: targetTop, left: targetLeft });
+		top = targetTop;
+		left = targetLeft;
+	}) as HTMLElement['scrollTo'];
 	return el;
 }
 
@@ -40,15 +68,30 @@ function makeSentence(box: { x: number; y: number; w: number; h: number }): HTML
 	return el;
 }
 
+function ioEntry(target: Element, isIntersecting: boolean): IntersectionObserverEntry {
+	return { target, isIntersecting } as unknown as IntersectionObserverEntry;
+}
+
 beforeEach(() => {
 	scrolls = [];
+	observed = new Set();
+	ioCallback = null;
 	// The scroller observes for reflow; jsdom has no IntersectionObserver.
 	vi.stubGlobal(
 		'IntersectionObserver',
 		class {
-			observe() {}
-			unobserve() {}
-			disconnect() {}
+			constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+				ioCallback = cb;
+			}
+			observe(el: Element) {
+				observed.add(el);
+			}
+			unobserve(el: Element) {
+				observed.delete(el);
+			}
+			disconnect() {
+				observed.clear();
+			}
 		}
 	);
 });
@@ -166,6 +209,34 @@ describe('detaching', () => {
 		container.dispatchEvent(new Event('scroll'));
 	}
 
+	it('completes a correction queued while suspended instead of detaching', async () => {
+		// Suspension can come from a scroll this scroller did not cause — a
+		// browser adjustment, or the tail of its own smooth animation. Dropping
+		// the line's correction then leaves it off-screen, and the settle check
+		// mistakes the app's own lost scroll for the reader walking away.
+		vi.useFakeTimers();
+		const container = makeContainer();
+		const first = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const second = makeSentence({ x: 0, y: 800, w: 400, h: 40 });
+		let el: HTMLElement | undefined = first;
+		const onDetach = vi.fn();
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false }, { onDetach });
+
+		s.scrollTo(1);
+		container.scrollTop = 0;
+		scrolls = [];
+		container.dispatchEvent(new Event('scroll'));
+		el = second;
+		s.scrollTo(2);
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(onDetach).not.toHaveBeenCalled();
+		// second's centre (820) brought up to the anchor (240).
+		expect(scrolls).toEqual([{ top: 580, left: 0 }]);
+		s.destroy();
+		vi.useRealTimers();
+	});
+
 	it('reports the reader having scrolled the active line off screen', async () => {
 		vi.useFakeTimers();
 		const container = makeContainer();
@@ -274,10 +345,10 @@ describe('long jumps', () => {
 		// that takes seconds and scrolls through everything in between.
 		const container = makeContainer();
 		const behaviors: (ScrollBehavior | undefined)[] = [];
-		container.scrollBy = ((opts: ScrollToOptions) => {
+		container.scrollTo = ((opts: ScrollToOptions) => {
 			behaviors.push(opts.behavior);
 			scrolls.push({ top: opts.top ?? 0, left: opts.left ?? 0 });
-		}) as HTMLElement['scrollBy'];
+		}) as HTMLElement['scrollTo'];
 
 		const near = makeSentence({ x: 0, y: 500, w: 400, h: 40 });
 		const far = makeSentence({ x: 0, y: 40000, w: 400, h: 40 });
@@ -294,6 +365,70 @@ describe('long jumps', () => {
 	});
 });
 
+describe('stale observations', () => {
+	// When the active sentence changes, the scroller stops observing the old
+	// element and observes the new one. A queued entry for the old element can
+	// still arrive afterwards; acting on it yanks the page back to where the
+	// narration used to be, undoing the scroll to the new line. WebKit delivers
+	// those queued entries where Chromium mostly drops them, which is what made
+	// this a phone-only oscillation.
+
+	it('ignores an entry for a sentence it no longer observes', () => {
+		const container = makeContainer();
+		const first = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const second = makeSentence({ x: 0, y: 100, w: 400, h: 40 });
+		let el: HTMLElement | undefined = first;
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false });
+
+		s.scrollTo(1);
+		el = second;
+		s.scrollTo(2);
+		scrolls = [];
+
+		ioCallback?.([ioEntry(first, false)]);
+
+		expect(scrolls).toEqual([]);
+		s.destroy();
+	});
+
+	it('still corrects when the sentence it observes leaves the viewport', () => {
+		const container = makeContainer();
+		const first = makeSentence({ x: 0, y: 2400, w: 400, h: 40 });
+		const second = makeSentence({ x: 0, y: 100, w: 400, h: 40 });
+		let el: HTMLElement | undefined = first;
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false });
+
+		s.scrollTo(1);
+		el = second;
+		s.scrollTo(2);
+		container.scrollTop = 0;
+		scrolls = [];
+
+		ioCallback?.([ioEntry(second, false)]);
+
+		// second's centre sits above the anchor: an upward correction.
+		expect(scrolls).toEqual([{ top: -120, left: 0 }]);
+		s.destroy();
+	});
+
+	it('aims at an absolute position so a repeat cannot double the move', () => {
+		// The jump to the narrated line is issued again whenever the observer
+		// still sees it off screen (a deferred programmatic scroll reads as
+		// "not moved yet"). A relative delta applied twice travels twice as far;
+		// an absolute destination is the same however often it is repeated.
+		const container = makeContainer();
+		container.scrollTop = 500;
+		const el = makeSentence({ x: 0, y: 480, w: 400, h: 40 });
+		const s = createAutoScroller(container, () => el, { anchor: 0.4, smooth: false });
+
+		s.scrollTo(1);
+
+		// 260 past the anchor from a scroll of 500: 760, not 260.
+		expect(scrolls).toEqual([{ top: 760, left: 0 }]);
+		s.destroy();
+	});
+});
+
 describe('switching writing mode', () => {
 	it('changes which axis is scrolled without rebuilding the scroller', () => {
 		const container = makeContainer();
@@ -304,9 +439,11 @@ describe('switching writing mode', () => {
 		expect(scrolls[0].top).not.toBe(0);
 		expect(scrolls[0].left).toBe(0);
 
+		const topBefore = container.scrollTop;
 		s.setOptions({ vertical: true });
 		s.scrollTo(1);
-		expect(scrolls[1].top).toBe(0);
+		// Only the reading axis moves; the other stays where it was.
+		expect(scrolls[1].top).toBe(topBefore);
 		expect(scrolls[1].left).not.toBe(0);
 		s.destroy();
 	});

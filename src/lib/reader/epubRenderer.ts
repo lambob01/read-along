@@ -134,6 +134,18 @@ export interface EpubRenderHandle {
 	 * switched off, so windowing follows the reader alone.
 	 */
 	clearAudioAnchor(): void;
+	/**
+	 * While following the narration, the mounted window stays around the audio
+	 * anchor and viewport changes no longer re-window it.
+	 *
+	 * Re-windowing on every viewport drift mounts and unmounts chapters whose
+	 * real extent differs from its estimate, which shifts the narrated line by
+	 * tens of thousands of pixels — and the reader's own scroll to it moves the
+	 * viewport, changing the anchor again. Pinning the window while following
+	 * breaks that loop; the viewport takes over again as soon as the reader
+	 * detaches.
+	 */
+	setFollowNarration(on: boolean): void;
 	/** Mounts every chapter. Used when the book is small enough not to window. */
 	mountAll(): void;
 	/**
@@ -273,6 +285,8 @@ export function renderEpub(
 	/** Chapter the narration is in, and the one the reader is looking at. */
 	let audioAnchor: number | null = null;
 	let viewAnchor: number | null = null;
+	/** While true, only the audio anchor decides what stays mounted. */
+	let followNarration = false;
 
 	/**
 	 * True under `writing-mode: vertical-rl`, where the block axis is
@@ -423,11 +437,11 @@ export function renderEpub(
 		const delta = nearEdge(anchorHost.getBoundingClientRect(), vertical) - before;
 		if (Math.abs(delta) < 1) return;
 		opts.onAdjustScroll?.();
-		// `scrollBy` takes physical deltas, so the negated vertical axis is
-		// negated back on the way out.
-		scroller.scrollBy({
-			top: vertical ? 0 : delta,
-			left: vertical ? -delta : 0,
+		// Absolute, like the autoscroller's corrections: a retried reflow
+		// correction must land on the same position, not move twice as far.
+		scroller.scrollTo({
+			top: vertical ? scroller.scrollTop : scroller.scrollTop + delta,
+			left: vertical ? scroller.scrollLeft - delta : scroller.scrollLeft,
 			behavior: 'auto'
 		});
 	}
@@ -531,7 +545,8 @@ export function renderEpub(
 
 	function reconcile(): void {
 		const keep = new Set<number>();
-		for (const anchor of [audioAnchor, viewAnchor]) {
+		const anchors = followNarration ? [audioAnchor] : [audioAnchor, viewAnchor];
+		for (const anchor of anchors) {
 			if (anchor === null) continue;
 			windowAround(anchor, keep);
 		}
@@ -551,30 +566,49 @@ export function renderEpub(
 	function setViewAnchor(order: number): void {
 		if (order === viewAnchor) return;
 		viewAnchor = order;
-		reconcile();
+		// While following, the viewport is where the narration is; letting it
+		// re-window anyway is what sets off the mount/shift/chase loop.
+		if (!followNarration) reconcile();
 		opts.onViewChapter?.(order);
 	}
 
 	/**
-	 * Tracks which chapters are on screen so windowing follows the reader.
-	 * Absent in jsdom, where nothing is laid out and the audio anchor is the
+	 * The chapter the viewport starts in, read from the live layout.
+	 *
+	 * Deliberately not derived from the observer's event set: an entry is a
+	 * snapshot, and a batch delivered after the layout has moved on names a
+	 * chapter that is no longer on screen. Windowing around it then mounts and
+	 * unmounts chapters elsewhere, which shifts the text — and the line being
+	 * narrated — by tens of thousands of pixels, and the reader never settles.
+	 */
+	function currentViewOrder(): number | null {
+		const vertical = isVertical();
+		const view = scroller ?? container;
+		const viewNear = nearEdge(view.getBoundingClientRect(), vertical);
+		let found: number | null = null;
+		for (const order of orders) {
+			const host = hosts.get(order);
+			if (!host) continue;
+			const near = nearEdge(host.getBoundingClientRect(), vertical);
+			if (near > viewNear + 1) break;
+			found = order;
+		}
+		return found;
+	}
+
+	/**
+	 * Tracks which chapter the reader is looking at so windowing follows them.
+	 * Absent in jsdom, where nothing is laid out; there the audio anchor is the
 	 * only one that can mean anything.
 	 */
-	const onScreen = new Set<number>();
 	let viewObserver: IntersectionObserver | null = null;
 	if (typeof IntersectionObserver === 'function') {
 		viewObserver = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const order = Number((entry.target as HTMLElement).dataset.chapter);
-					if (Number.isNaN(order)) continue;
-					if (entry.isIntersecting) onScreen.add(order);
-					else onScreen.delete(order);
-				}
-				if (onScreen.size === 0) return;
-				// The earliest chapter on screen is the one being read: reading
-				// runs out of a chapter before the next one comes into view.
-				setViewAnchor(Math.min(...onScreen));
+			() => {
+				// The entries only say that something moved; where the viewport
+				// actually is has to be measured.
+				const order = currentViewOrder();
+				if (order !== null) setViewAnchor(order);
 			},
 			{ root: scroller, threshold: 0 }
 		);
@@ -604,6 +638,11 @@ export function renderEpub(
 			audioAnchor = null;
 			reconcile();
 		},
+		setFollowNarration(on: boolean) {
+			if (on === followNarration) return;
+			followNarration = on;
+			reconcile();
+		},
 		scrollToChapter(order: number) {
 			const host = hosts.get(order);
 			if (!host) return;
@@ -617,9 +656,9 @@ export function renderEpub(
 			const pad = parseFloat(vertical ? style.paddingRight : style.paddingTop) || 0;
 			const target = nearEdge(scroller.getBoundingClientRect(), vertical) + pad;
 			const delta = nearEdge(host.getBoundingClientRect(), vertical) - target;
-			scroller.scrollBy({
-				top: vertical ? 0 : delta,
-				left: vertical ? -delta : 0,
+			scroller.scrollTo({
+				top: vertical ? scroller.scrollTop : scroller.scrollTop + delta,
+				left: vertical ? scroller.scrollLeft - delta : scroller.scrollLeft,
 				behavior: 'auto'
 			});
 		},

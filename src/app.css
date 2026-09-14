@@ -224,6 +224,20 @@ body {
 }
 
 /*
+	The reader corrects for its own chapter mounts and unmounts (see
+	`withScrollAnchor`). Native scroll anchoring would correct for them too, on
+	its own schedule, and two corrections for one reflow read as a jump. The
+	opt-out therefore covers every candidate anchor inside the reader, not just
+	the scroll container.
+*/
+html,
+body,
+.reader-scroller,
+.reader-scroller * {
+	overflow-anchor: none !important;
+}
+
+/*
 	Vertical Japanese typesetting. `vertical-rl` is right-to-left by definition:
 	columns run top to bottom and each new column starts to the left of the
 	last, so the reader scrolls horizontally and backwards. Browsers park the
