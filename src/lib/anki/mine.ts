@@ -185,7 +185,18 @@ export async function mineSentence(
 		// The newest note is whatever the user last made, which may not use the
 		// note type they configured. Saying so beats AnkiConnect's bare field error.
 		const [info] = await deps.anki.notesInfo(target, [noteId]);
-		if (info && !(audioField in info.fields)) {
+		// The note can be deleted between the search and this lookup, and a
+		// reply with no usable fields cannot be updated either. Both have to
+		// stop here: having passed the "does it have the audio field" check
+		// vacuously, the mine would capture the clip and upload the media
+		// against a note that can never receive it.
+		const fields = info?.fields;
+		if (!fields || typeof fields !== 'object') {
+			throw new AnkiError(
+				`The last card (note ${noteId}) could not be read; it may have been deleted. Make the card again, then mine the audio.`
+			);
+		}
+		if (!(audioField in fields)) {
 			throw new AnkiError(
 				`The last card (note type "${info.modelName}") has no field named "${audioField}".`
 			);

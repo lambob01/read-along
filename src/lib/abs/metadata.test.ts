@@ -119,6 +119,12 @@ describe('descriptionToParagraphs', () => {
 		expect(descriptionToParagraphs('a&nbsp;b')).toEqual(['a b']);
 	});
 
+	it('keeps text between escaped angle brackets', () => {
+		// Decoding before stripping turns `&lt; 3 and y &gt;` into a bogus tag
+		// and the strip then swallows everything up to the next `>`.
+		expect(descriptionToParagraphs('x &lt; 3 and y &gt; 2')).toEqual(['x < 3 and y > 2']);
+	});
+
 	it('returns empty for missing description', () => {
 		expect(descriptionToParagraphs(null)).toEqual([]);
 		expect(descriptionToParagraphs('')).toEqual([]);

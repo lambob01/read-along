@@ -12,8 +12,16 @@ function makeLocalStorage() {
 	};
 }
 
+/** Nearest own descriptor, so an installed throwing getter can be undone. */
+const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+
 afterEach(() => {
 	vi.unstubAllGlobals();
+	if (originalLocalStorage) {
+		Object.defineProperty(globalThis, 'localStorage', originalLocalStorage);
+	} else {
+		delete (globalThis as { localStorage?: unknown }).localStorage;
+	}
 });
 
 describe('safeSetItem', () => {
@@ -32,6 +40,19 @@ describe('safeSetItem', () => {
 			throw new DOMException('quota exceeded', 'QuotaExceededError');
 		};
 		vi.stubGlobal('localStorage', storage);
+
+		expect(() => safeSetItem('reader-test', 'value')).not.toThrow();
+	});
+
+	it('swallows storage whose very access throws', () => {
+		// Blocked third-party storage throws from the property getter itself,
+		// before `setItem` is ever reached.
+		Object.defineProperty(globalThis, 'localStorage', {
+			configurable: true,
+			get() {
+				throw new DOMException('denied', 'SecurityError');
+			}
+		});
 
 		expect(() => safeSetItem('reader-test', 'value')).not.toThrow();
 	});

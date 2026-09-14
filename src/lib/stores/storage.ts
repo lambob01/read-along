@@ -8,8 +8,11 @@
  * the value either way, so swallowing is the whole contract.
  */
 export function safeSetItem(key: string, value: string): void {
-	if (typeof localStorage === 'undefined') return;
 	try {
+		// The property access itself throws when storage is blocked for the
+		// origin (third-party cookies off, Safari's private mode), so it has
+		// to sit inside the guard, not in front of it.
+		if (typeof localStorage === 'undefined') return;
 		localStorage.setItem(key, value);
 	} catch {
 		/* best-effort persistence; the visible state does not depend on it */

@@ -30,6 +30,9 @@ export const NON_PROSE_TAGS = new Set([
 	'STYLE',
 	'LINK',
 	'META',
+	// Repoints every relative URL in the document; it carries no text, so
+	// alignment is unaffected, but rendering it would rewrite link targets.
+	'BASE',
 	'SVG',
 	'VIDEO',
 	'AUDIO',

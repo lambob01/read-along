@@ -166,12 +166,16 @@ export function formatSize(bytes: number | null): string | null {
 /** Strips the HTML Audiobookshelf allows in descriptions down to plain text. */
 export function descriptionToParagraphs(description: string | null): string[] {
 	if (!description) return [];
-	// Decode first: `&nbsp;` and friends are whitespace once decoded, so the
-	// collapse below has to see the decoded form.
-	return decodeEntities(description)
-		.replace(/<br\s*\/?>/gi, '\n')
-		.replace(/<\/p>/gi, '\n\n')
-		.replace(/<[^>]+>/g, '')
+	// Strip markup before decoding: `&lt;`/`&gt;` are literal angle brackets in
+	// prose, and decoding first would turn them into a tag the strip below
+	// swallows up to the next `>`. Decoding still precedes the whitespace
+	// collapse, so `&nbsp;` and friends are seen as the whitespace they become.
+	return decodeEntities(
+		description
+			.replace(/<br\s*\/?>/gi, '\n')
+			.replace(/<\/p>/gi, '\n\n')
+			.replace(/<[^>]+>/g, '')
+	)
 		.split(/\n{2,}/)
 		.map((p) => p.replace(/\s+/g, ' ').trim())
 		.filter(Boolean);

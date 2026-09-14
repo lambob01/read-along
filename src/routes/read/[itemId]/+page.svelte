@@ -2215,8 +2215,10 @@
 		{/if}
 
 		<!-- The way back. Shown only once the reader has actually gone somewhere
-		     else, so it is an offer rather than a nag. -->
-		{#if readAlong && detached && $reader.cueIndex}
+		     else, so it is an offer rather than a nag. Gated on audio like the
+		     other read-along surfaces: without a track there is nothing for
+		     `goToNarration` to scroll to. -->
+		{#if readAlong && !noAudioNotice && detached && $reader.cueIndex}
 			<div class="absolute right-3 bottom-28 z-40">
 				<button
 					onclick={goToNarration}

@@ -349,6 +349,18 @@ describe('cloneForRender sanitization', () => {
 		expect(container.querySelector('form')).toBeNull();
 	});
 
+	it('drops base elements, which would repoint the whole document', () => {
+		const { container, handle, index } = setup(
+			['<p>朝が来た。<base href="https://evil.example/" />鳥が鳴いた。</p>'],
+			[['朝が来た。鳥が鳴いた。', 0, 2]]
+		);
+		handle.ensureVisible(index.sentences[0].id);
+
+		expect(container.querySelector('base')).toBeNull();
+		// Removing the element must not take the surrounding prose with it.
+		expect(container.querySelector('.reader-block')?.textContent).toBe('朝が来た。鳥が鳴いた。');
+	});
+
 	it('strips srcdoc and src attributes', () => {
 		const { container, handle, index } = setup(
 			['<p>朝が来た。<video src="https://evil.example"></video></p>'],

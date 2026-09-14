@@ -9,7 +9,7 @@ import {
 	type MineDeps,
 	type MineRequest
 } from '$lib/anki/mine';
-import { newestNoteId } from '$lib/anki/connect';
+import { AnkiError, newestNoteId } from '$lib/anki/connect';
 import { defaultSettings, type SettingsState } from '$lib/stores/settings';
 
 function withAnki(overrides: Partial<SettingsState>): SettingsState {
@@ -211,6 +211,33 @@ describe('mineSentence', () => {
 		await expect(mineSentence(REQUEST, UPDATE_SETTINGS, deps)).rejects.toThrow(
 			/no field named "SentenceAudio"/
 		);
+
+		expect(deps.anki.storeMediaFile).not.toHaveBeenCalled();
+		expect(deps.capture).not.toHaveBeenCalled();
+	});
+
+	it('does not capture or upload when the found note vanished before lookup', async () => {
+		const deps = makeDeps();
+		deps.anki.notesInfo = vi.fn(async () => []);
+
+		await expect(mineSentence(REQUEST, UPDATE_SETTINGS, deps)).rejects.toBeInstanceOf(AnkiError);
+
+		expect(deps.anki.storeMediaFile).not.toHaveBeenCalled();
+		expect(deps.capture).not.toHaveBeenCalled();
+	});
+
+	it('reports an entry with no readable fields as an AnkiError, not a TypeError', async () => {
+		const deps = makeDeps();
+		deps.anki.notesInfo = vi.fn(async () => [
+			{
+				noteId: 1700000000000,
+				modelName: 'Basic',
+				fields: undefined as never,
+				tags: []
+			}
+		]);
+
+		await expect(mineSentence(REQUEST, UPDATE_SETTINGS, deps)).rejects.toBeInstanceOf(AnkiError);
 
 		expect(deps.anki.storeMediaFile).not.toHaveBeenCalled();
 		expect(deps.capture).not.toHaveBeenCalled();
