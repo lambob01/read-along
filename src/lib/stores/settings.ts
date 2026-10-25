@@ -374,6 +374,19 @@ export function isDarkColor(hex: string): boolean {
 	return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.45;
 }
 
+const DARK_THEMES: readonly ThemeName[] = ['dark', 'oled', 'dracula', 'gray'];
+
+/** Whether the active palette is dark, including a dark custom background. */
+export function isDarkTheme(s: Pick<SettingsState, 'theme' | 'customTheme'>): boolean {
+	if (s.theme === 'custom') return isDarkColor(s.customTheme.bg);
+	return DARK_THEMES.includes(s.theme);
+}
+
+/** The quick toggle only ever flips between the two plain themes. */
+export function toggledTheme(s: Pick<SettingsState, 'theme' | 'customTheme'>): ThemeName {
+	return isDarkTheme(s) ? 'light' : 'dark';
+}
+
 export function applySettingsToDOM(s: SettingsState) {
 	if (typeof document === 'undefined') return;
 	const root = document.documentElement;
